@@ -20,11 +20,15 @@ from aiodynet import (
     AnyMessage,
     AreaPresetMessage,
     ChannelLevelReport,
+    ClockDate,
+    ClockTime,
     FadeChannelToPreset,
     Level,
     LinearPresetSelect,
+    LogicalMessage,
     Message,
     Packet,
+    PhysicalMessage,
     PresetReport,
     PresetSelect,
     RequestChannelLevel,
@@ -258,8 +262,8 @@ def test_messages_are_immutable() -> None:
     "raw",
     [
         "5c0102030405ff",  # physical
-        "1c050004000000",  # area off: not typed yet
-        "1c050071803200",  # ramp channel to level: not typed yet
+        "1c050020000000",  # set area links: bit order undocumented
+        "1c050064000000",  # preset offset: meaning unclear
         "6c000000000000",  # unknown sync byte
     ],
 )
@@ -270,7 +274,7 @@ def test_unknown_messages_keep_the_packet(raw: str) -> None:
     assert message.to_packet() == packet
 
 
-def describe(message: AnyMessage) -> str:
+def describe(message: AnyMessage) -> str:  # noqa: PLR0911
     """Exhaustive match; mypy fails here if a message type is added to AnyMessage."""
     match message:
         case PresetSelect() | LinearPresetSelect() | PresetReport():
@@ -283,6 +287,10 @@ def describe(message: AnyMessage) -> str:
             return "request level"
         case FadeChannelToPreset():
             return "channel preset"
+        case ClockTime() | ClockDate():
+            return "clock"
+        case LogicalMessage():
+            return "other logical"
         case UnknownMessage():
             return "unknown"
         case _:
@@ -292,6 +300,8 @@ def describe(message: AnyMessage) -> str:
 def test_exhaustive_match() -> None:
     assert describe(decode(Packet.from_hex("1c050001000000"))) == "preset 2"
     assert describe(decode(Packet.from_hex("5c0102030405ff"))) == "unknown"
+    assert describe(decode(Packet.from_hex("5caa5550175242"))) == "clock"
+    assert describe(decode(Packet.from_hex("1c050076000000"))) == "other logical"
 
 
 levels = st.builds(Level, st.integers(0, 255))
@@ -353,6 +363,8 @@ def test_message_round_trip(message: AnyMessage) -> None:
 def test_decode_never_raises(data: bytes) -> None:
     packet = Packet(data)
     message = decode(packet)
-    if not isinstance(message, UnknownMessage):
+    if isinstance(message, LogicalMessage):
         assert message.area == packet[1]
         assert message.join == packet[6]
+    elif isinstance(message, PhysicalMessage):
+        assert (message.device_code, message.box) == (packet[1], packet[2])

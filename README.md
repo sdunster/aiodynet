@@ -83,7 +83,24 @@ in the DyNet tools and on keypads.
 | `ChannelLevelReport` | 0x60 | A channel reports its target and actual level |
 | `RequestChannelLevel` | 0x61 | Ask a channel for its level |
 | `FadeChannelToPreset` | 0x6B | Fade one channel, or every channel, to a preset's level |
+| `AreaCommand` | 0x05, 0x06, 0x08, 0x15, 0x16, 0x66 | Area commands with no data: step the area level down or up, program the current preset, disable or enable panels, save the current preset (`AreaCommandType`) |
+| `AreaOff`, `ResetPreset`, `Panic`, `Unpanic` | 0x04, 0x0F, 0x17, 0x18 | Area commands with a preset-style fade |
+| `AreaToLevel` | 0x79 | Fade every channel in an area to one level |
+| `ChannelOff`, `ChannelOn` | 0x74, 0x75 | Fade a channel, or every channel, to off or full |
+| `StopFade` | 0x76 | Stop a channel, or every channel, mid-fade |
+| `FadeChannelToLevel` | 0x71–0x73 | The newer channel-level opcodes; `scale` names which one |
+| `RestoreSavedPreset` | 0x67 | Return to the preset saved with `SAVE_CURRENT_PRESET` |
+| `MotionActivitySync` | 0x2E | A motion sensor sharing its activity timer |
+| `SetUserPreference`, `RequestUserPreference`, `UserPreferenceReport` | 0x48–0x4A | Device-specific 16-bit preference values |
+| `RequestPresetLevel`, `PresetLevelReport` | 0x91, 0x92 | The level a channel has stored for a preset |
+| `ClockTime`, `ClockDate` | physical 0x50, 0x53 | A device setting or broadcasting the time and date |
 | `UnknownMessage` | anything else | Passed through unchanged, packet included |
+
+Where an opcode can address one channel or the whole area, `channel=None`
+means every channel. Fields whose unit the opcode list doesn't pin down are
+kept raw and named `*_raw` (for example `fade_raw`, `time_raw`), rather than
+guessed. Area links (0x20–0x23) are left undecoded because the opcode list
+doesn't say which bit is which area.
 
 `PresetSelect`, `LinearPresetSelect` and `PresetReport` share the base class
 `AreaPresetMessage`, so `isinstance(message, AreaPresetMessage)` catches "this
@@ -189,6 +206,8 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `RequestPreset`, `RequestChannelLevel` | Byte-for-byte match with `dynalite-devices` 0.1.47 |
 | `PresetReport`, `LinearPresetSelect`, `ChannelLevelReport`, `FadeChannelToPreset` | Opcode list, plus the meaning `dynalite-devices` 0.1.47 takes from them. Not yet checked against captured traffic |
 | `FadeChannelToPreset` fade unit | Unknown, so it's kept as a raw byte |
+| `MotionActivitySync`, `UserPreferenceReport`, `ClockTime`, `ClockDate` | Opcode list, plus packets captured on a real site (`tests/fixtures/site-capture.jsonl`). The clock bytes are BCD, and the date packs the day of the week into the top three bits of the month byte; both inferred from that capture |
+| All other extended messages | Byte layout from the opcode list only |
 
 The `dynalite-devices` comparison was made black-box: by driving its public
 API against a fake gateway and recording the bytes, without reading its source.

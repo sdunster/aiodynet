@@ -13,3 +13,8 @@ First release.
   subscriptions, `query`, and a clean `close`
 - `check_connection` for validating a host and port
 - `aiodynet.testing.FakeGateway` for tests
+- Typed messages for every other opcode whose layout the DyNet opcode list
+  defines clearly: area commands, area off/reset/panic, area and channel
+  fades, stop fade, the 0x71-0x73 channel levels, motion sync, user
+  preferences, preset levels, and the physical clock time and date
+  broadcasts

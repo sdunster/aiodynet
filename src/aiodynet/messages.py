@@ -12,7 +12,12 @@ sent. All fields are keyword-only, so ``SetChannelLevel(area=1, channel=2,
 ...)`` can't silently swap two numbers.
 
 Numbering follows the DyNet tools and keypads, not the wire: channels and
-presets start at 1. Areas are sent as-is (0-255).
+presets start at 1. Areas are sent as-is (0-255). Where an opcode can address
+one channel or the whole area, ``channel=None`` means every channel (0xFF on
+the wire).
+
+Fields whose unit the DyNet opcode list doesn't pin down are kept raw and named
+``*_raw``, rather than guessed.
 
 Anything this module has no class for decodes to `UnknownMessage`, which
 keeps the packet, so nothing on the bus is ever lost.
@@ -21,31 +26,52 @@ keeps the packet, so nothing on the bus is ever lost.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import TYPE_CHECKING, ClassVar, Self, override
+from typing import ClassVar, Self, cast, override
 
 from .packet import Packet, SyncType
 from .values import FADE_UNIT, JOIN_ALL, Level, decode_fade, encode_fade
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
 __all__ = [
     "AnyMessage",
+    "AreaCommand",
+    "AreaCommandType",
+    "AreaOff",
     "AreaPresetMessage",
+    "AreaToLevel",
     "ChannelLevelReport",
+    "ChannelOff",
+    "ChannelOn",
+    "ClockDate",
+    "ClockTime",
+    "FadeChannelToLevel",
     "FadeChannelToPreset",
+    "FadeScale",
     "LinearPresetSelect",
     "LogicalMessage",
     "Message",
+    "MotionActivitySync",
     "Opcode",
+    "Panic",
+    "PhysicalMessage",
+    "PhysicalOpcode",
+    "PresetLevelReport",
     "PresetReport",
     "PresetSelect",
     "RequestChannelLevel",
     "RequestPreset",
+    "RequestPresetLevel",
+    "RequestUserPreference",
+    "ResetPreset",
+    "RestoreSavedPreset",
     "SetChannelLevel",
+    "SetUserPreference",
+    "StopFade",
     "UnknownMessage",
+    "Unpanic",
+    "UserPreferenceReport",
     "decode",
 ]
 
@@ -57,20 +83,51 @@ class Opcode(IntEnum):
     PRESET_2 = 0x01
     PRESET_3 = 0x02
     PRESET_4 = 0x03
+    AREA_OFF = 0x04
+    DECREMENT_AREA_LEVEL = 0x05
+    INCREMENT_AREA_LEVEL = 0x06
+    PROGRAM_CURRENT_PRESET = 0x08
     PRESET_5 = 0x0A
     PRESET_6 = 0x0B
     PRESET_7 = 0x0C
     PRESET_8 = 0x0D
+    RESET_PRESET = 0x0F
+    DISABLE_PANELS = 0x15
+    ENABLE_PANELS = 0x16
+    PANIC = 0x17
+    UNPANIC = 0x18
+    MOTION_ACTIVITY_SYNC = 0x2E
+    SET_USER_PREFERENCE = 0x48
+    REQUEST_USER_PREFERENCE = 0x49
+    REPORT_USER_PREFERENCE = 0x4A
     REPORT_CHANNEL_LEVEL = 0x60
     REQUEST_CHANNEL_LEVEL = 0x61
     REPORT_PRESET = 0x62
     REQUEST_PRESET = 0x63
     LINEAR_PRESET = 0x65
+    SAVE_CURRENT_PRESET = 0x66
+    RESTORE_SAVED_PRESET = 0x67
     FADE_CHANNEL_TO_PRESET = 0x6B
+    FADE_CHANNEL_TO_LEVEL_TENTHS = 0x71
+    FADE_CHANNEL_TO_LEVEL_SECONDS = 0x72
+    FADE_CHANNEL_TO_LEVEL_MINUTES = 0x73
+    CHANNEL_OFF = 0x74
+    CHANNEL_ON = 0x75
+    STOP_FADE = 0x76
+    AREA_TO_LEVEL = 0x79
     SET_CHANNEL_1_LEVEL = 0x80
     SET_CHANNEL_2_LEVEL = 0x81
     SET_CHANNEL_3_LEVEL = 0x82
     SET_CHANNEL_4_LEVEL = 0x83
+    REQUEST_PRESET_LEVEL = 0x91
+    REPORT_PRESET_LEVEL = 0x92
+
+
+class PhysicalOpcode(IntEnum):
+    """The physical (0x5C) opcodes aiodynet decodes into typed messages."""
+
+    WRITE_TIME = 0x50
+    WRITE_DATE = 0x53
 
 
 # Presets 1-8 within a bank use these opcodes, in order.
@@ -110,6 +167,39 @@ def _check_int(name: str, value: object, low: int, high: int) -> None:
     if not low <= value <= high:
         msg = f"{name} must be {low}-{high}, got {value}"
         raise ValueError(msg)
+
+
+def _check_channel_or_all(value: object) -> None:
+    if value is not None:
+        _check_int("channel", value, 1, 255)
+
+
+def _channel_to_wire(channel: int | None) -> int:
+    return ALL_CHANNELS if channel is None else channel - 1
+
+
+def _channel_from_wire(byte: int) -> int | None:
+    return None if byte == ALL_CHANNELS else byte + 1
+
+
+def _preset_fade_steps(fade: float) -> int:
+    return encode_fade(fade, unit=FADE_UNIT, max_steps=0xFFFF, field="fade")
+
+
+def _preset_fade(low: int, high: int) -> float:
+    return decode_fade(low | high << 8, unit=FADE_UNIT)
+
+
+def _to_bcd(value: int) -> int:
+    return (value // 10) << 4 | value % 10
+
+
+def _from_bcd(byte: int, name: str) -> int:
+    tens, units = byte >> 4, byte & 0x0F
+    if tens > 9 or units > 9:
+        msg = f"{name} byte 0x{byte:02x} is not BCD"
+        raise ValueError(msg)
+    return tens * 10 + units
 
 
 def _check_level(name: str, value: object) -> None:
@@ -467,6 +557,627 @@ class FadeChannelToPreset(LogicalMessage):
         )
 
 
+class AreaCommandType(IntEnum):
+    """Area commands that carry no data (each is its own opcode)."""
+
+    DECREMENT_LEVEL = Opcode.DECREMENT_AREA_LEVEL
+    """Lower every channel in the area by one step (1/255)."""
+    INCREMENT_LEVEL = Opcode.INCREMENT_AREA_LEVEL
+    """Raise every channel in the area by one step (1/255)."""
+    PROGRAM_CURRENT_PRESET = Opcode.PROGRAM_CURRENT_PRESET
+    """Leave program mode and store the current levels in the current preset."""
+    DISABLE_PANELS = Opcode.DISABLE_PANELS
+    """Disable the area's panels (keypads)."""
+    ENABLE_PANELS = Opcode.ENABLE_PANELS
+    """Enable the area's panels (keypads)."""
+    SAVE_CURRENT_PRESET = Opcode.SAVE_CURRENT_PRESET
+    """Remember the current preset, for `RestoreSavedPreset`."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AreaCommand(LogicalMessage):
+    """An area command with no data, such as enabling panels (see `AreaCommandType`)."""
+
+    opcodes: ClassVar[tuple[int, ...]] = tuple(AreaCommandType)
+
+    command: AreaCommandType
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        command: object = self.command  # checked at runtime for untyped callers
+        if not isinstance(command, AreaCommandType):
+            msg = (
+                f"command must be an AreaCommandType, not {type(self.command).__name__}"
+            )
+            raise TypeError(msg)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(0, self.command, 0, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, _, opcode, _, _, join = packet.data
+        return cls(area=area, command=AreaCommandType(opcode), join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _AreaFadeMessage(LogicalMessage):
+    """An area command with a preset-style fade (low byte 2, high byte 4)."""
+
+    opcode: ClassVar[int]
+
+    fade: float = 0.0
+    """Fade time in seconds, up to `MAX_PRESET_FADE`, in 20 ms steps."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _preset_fade_steps(self.fade)
+
+    @override
+    def to_packet(self) -> Packet:
+        steps = _preset_fade_steps(self.fade)
+        return self._packet(steps & 0xFF, self.opcode, steps >> 8, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, low, _, high, _, join = packet.data
+        return cls(area=area, fade=_preset_fade(low, high), join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AreaOff(_AreaFadeMessage):
+    """Fade every channel in an area to off (opcode 0x04)."""
+
+    opcode: ClassVar[int] = Opcode.AREA_OFF
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.AREA_OFF,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResetPreset(_AreaFadeMessage):
+    """Fade an area back to the levels of its current preset (opcode 0x0F)."""
+
+    opcode: ClassVar[int] = Opcode.RESET_PRESET
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.RESET_PRESET,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Panic(_AreaFadeMessage):
+    """Put an area into panic mode (opcode 0x17)."""
+
+    opcode: ClassVar[int] = Opcode.PANIC
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.PANIC,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Unpanic(_AreaFadeMessage):
+    """Take an area out of panic mode (opcode 0x18)."""
+
+    opcode: ClassVar[int] = Opcode.UNPANIC
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.UNPANIC,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AreaToLevel(LogicalMessage):
+    """Fade every channel in an area to one level (opcode 0x79)."""
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.AREA_TO_LEVEL,)
+
+    level: Level
+    """The level to fade to."""
+
+    fade: float = 0.0
+    """Fade time in seconds, up to `MAX_PRESET_FADE`, in 20 ms steps."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_level("level", self.level)
+        _preset_fade_steps(self.fade)
+
+    @override
+    def to_packet(self) -> Packet:
+        steps = _preset_fade_steps(self.fade)
+        return self._packet(
+            self.level.raw, Opcode.AREA_TO_LEVEL, steps & 0xFF, steps >> 8
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, level, _, low, high, join = packet.data
+        return cls(
+            area=area, level=Level(level), fade=_preset_fade(low, high), join=join
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _ChannelFadeMessage(LogicalMessage):
+    """A channel command with a preset-style fade (low byte 4, high byte 5)."""
+
+    opcode: ClassVar[int]
+
+    channel: int | None
+    """The channel, numbered from 1, or ``None`` for every channel."""
+
+    fade: float = 0.0
+    """Fade time in seconds, up to `MAX_PRESET_FADE`, in 20 ms steps."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+        _preset_fade_steps(self.fade)
+
+    @override
+    def to_packet(self) -> Packet:
+        steps = _preset_fade_steps(self.fade)
+        return self._packet(
+            _channel_to_wire(self.channel), self.opcode, steps & 0xFF, steps >> 8
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, low, high, join = packet.data
+        return cls(
+            area=area,
+            channel=_channel_from_wire(channel),
+            fade=_preset_fade(low, high),
+            join=join,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ChannelOff(_ChannelFadeMessage):
+    """Fade a channel, or every channel, to off (opcode 0x74)."""
+
+    opcode: ClassVar[int] = Opcode.CHANNEL_OFF
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.CHANNEL_OFF,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ChannelOn(_ChannelFadeMessage):
+    """Fade a channel, or every channel, to full (opcode 0x75)."""
+
+    opcode: ClassVar[int] = Opcode.CHANNEL_ON
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.CHANNEL_ON,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StopFade(LogicalMessage):
+    """Stop a channel, or every channel, where it is mid-fade (opcode 0x76)."""
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.STOP_FADE,)
+
+    channel: int | None
+    """The channel, numbered from 1, or ``None`` for every channel."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(_channel_to_wire(self.channel), Opcode.STOP_FADE, 0, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, _, _, join = packet.data
+        return cls(area=area, channel=_channel_from_wire(channel), join=join)
+
+
+class FadeScale(IntEnum):
+    """Which of the three "fade channel to level" opcodes a message uses.
+
+    The opcode list describes them as 0.1 s, 1 s and 1 minute steps. That
+    isn't confirmed on hardware, so `FadeChannelToLevel` keeps the fade raw.
+    """
+
+    TENTHS = Opcode.FADE_CHANNEL_TO_LEVEL_TENTHS
+    SECONDS = Opcode.FADE_CHANNEL_TO_LEVEL_SECONDS
+    MINUTES = Opcode.FADE_CHANNEL_TO_LEVEL_MINUTES
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FadeChannelToLevel(LogicalMessage):
+    """Fade a channel, or every channel, to a level (opcodes 0x71-0x73).
+
+    These are the "newer" channel-level opcodes. `SetChannelLevel` (0x80-0x83)
+    is what existing integrations send.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = tuple(FadeScale)
+
+    channel: int | None
+    """The channel, numbered from 1, or ``None`` for every channel."""
+
+    level: Level
+    """The level to fade to."""
+
+    scale: FadeScale
+    """Which opcode, and so which unit `fade_raw` counts in."""
+
+    fade_raw: int = 0
+    """The fade byte exactly as sent, in `scale` units."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+        _check_level("level", self.level)
+        scale: object = self.scale  # checked at runtime for untyped callers
+        if not isinstance(scale, FadeScale):
+            msg = f"scale must be a FadeScale, not {type(self.scale).__name__}"
+            raise TypeError(msg)
+        _check_int("fade_raw", self.fade_raw, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            _channel_to_wire(self.channel), self.scale, self.level.raw, self.fade_raw
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, opcode, level, fade, join = packet.data
+        return cls(
+            area=area,
+            channel=_channel_from_wire(channel),
+            level=Level(level),
+            scale=FadeScale(opcode),
+            fade_raw=fade,
+            join=join,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RestoreSavedPreset(LogicalMessage):
+    """Go back to the preset remembered by ``SAVE_CURRENT_PRESET`` (opcode 0x67).
+
+    The fade byte's unit isn't documented, so it is kept raw.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.RESTORE_SAVED_PRESET,)
+
+    fade_raw: int = 0
+    """The fade byte exactly as sent (unit unconfirmed)."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int("fade_raw", self.fade_raw, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(0, Opcode.RESTORE_SAVED_PRESET, 0, self.fade_raw)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, _, _, _, fade, join = packet.data
+        return cls(area=area, fade_raw=fade, join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MotionActivitySync(LogicalMessage):
+    """A motion sensor sharing its activity timer with others (opcode 0x2E).
+
+    Sent by DyNet motion sensors (DUS704 and similar). The timer's unit isn't
+    documented, so it is kept raw.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.MOTION_ACTIVITY_SYNC,)
+
+    channel: int | None
+    """The channel, numbered from 1, or ``None`` for every channel."""
+
+    time_raw: int
+    """The 16-bit time value exactly as sent (unit unconfirmed)."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+        _check_int("time_raw", self.time_raw, 0, 0xFFFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            _channel_to_wire(self.channel),
+            Opcode.MOTION_ACTIVITY_SYNC,
+            self.time_raw >> 8,
+            self.time_raw & 0xFF,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, high, low, join = packet.data
+        return cls(
+            area=area,
+            channel=_channel_from_wire(channel),
+            time_raw=high << 8 | low,
+            join=join,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _UserPreferenceMessage(LogicalMessage):
+    """Set or report a user preference value (high byte 4, low byte 5)."""
+
+    opcode: ClassVar[int]
+
+    preference: int
+    """Which preference, 0-255. What each one means depends on the device."""
+
+    value: int
+    """The 16-bit value."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int("preference", self.preference, 0, 0xFF)
+        _check_int("value", self.value, 0, 0xFFFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            self.preference, self.opcode, self.value >> 8, self.value & 0xFF
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, preference, _, high, low, join = packet.data
+        return cls(area=area, preference=preference, value=high << 8 | low, join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SetUserPreference(_UserPreferenceMessage):
+    """Set a user preference in an area (opcode 0x48)."""
+
+    opcode: ClassVar[int] = Opcode.SET_USER_PREFERENCE
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.SET_USER_PREFERENCE,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UserPreferenceReport(_UserPreferenceMessage):
+    """An area reporting a user preference (opcode 0x4A)."""
+
+    opcode: ClassVar[int] = Opcode.REPORT_USER_PREFERENCE
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.REPORT_USER_PREFERENCE,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RequestUserPreference(LogicalMessage):
+    """Ask an area for a user preference (opcode 0x49)."""
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.REQUEST_USER_PREFERENCE,)
+
+    preference: int
+    """Which preference, 0-255."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int("preference", self.preference, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(self.preference, Opcode.REQUEST_USER_PREFERENCE, 0, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, preference, _, _, _, join = packet.data
+        return cls(area=area, preference=preference, join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RequestPresetLevel(LogicalMessage):
+    """Ask what level a channel has stored for a preset (opcode 0x91)."""
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.REQUEST_PRESET_LEVEL,)
+
+    channel: int
+    """The channel, numbered from 1."""
+
+    preset: int
+    """The preset, numbered from 1."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int("channel", self.channel, 1, 256)
+        _check_int("preset", self.preset, 1, 256)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            self.channel - 1, Opcode.REQUEST_PRESET_LEVEL, self.preset - 1, 0
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, preset, _, join = packet.data
+        return cls(area=area, channel=channel + 1, preset=preset + 1, join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PresetLevelReport(LogicalMessage):
+    """A channel reporting the level it has stored for a preset (opcode 0x92)."""
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.REPORT_PRESET_LEVEL,)
+
+    channel: int
+    """The channel, numbered from 1."""
+
+    preset: int
+    """The preset, numbered from 1."""
+
+    level: Level
+    """The stored level."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int("channel", self.channel, 1, 256)
+        _check_int("preset", self.preset, 1, 256)
+        _check_level("level", self.level)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            self.channel - 1,
+            Opcode.REPORT_PRESET_LEVEL,
+            self.preset - 1,
+            self.level.raw,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, preset, level, join = packet.data
+        return cls(
+            area=area,
+            channel=channel + 1,
+            preset=preset + 1,
+            level=Level(level),
+            join=join,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PhysicalMessage(Message):
+    """A message addressed to a device (sync byte 0x5C)."""
+
+    opcodes: ClassVar[tuple[int, ...]]
+
+    device_code: int
+    """The device type code, 0-255."""
+
+    box: int
+    """The box number, 0-255."""
+
+    def __post_init__(self) -> None:
+        """Validate the common fields."""
+        _check_int("device_code", self.device_code, 0, 0xFF)
+        _check_int("box", self.box, 0, 0xFF)
+
+    def _packet(self, opcode: int, d1: int, d2: int, d3: int) -> Packet:
+        return Packet.build(
+            SyncType.PHYSICAL, self.device_code, self.box, opcode, d1, d2, d3
+        )
+
+    @classmethod
+    @abstractmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        """Decode a physical packet whose opcode is in `opcodes`."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ClockTime(PhysicalMessage):
+    """A device setting or broadcasting the time of day (physical opcode 0x50).
+
+    Hours, minutes and seconds are BCD on the wire. A packet whose bytes
+    aren't valid BCD times decodes as `UnknownMessage` instead.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.WRITE_TIME,)
+
+    hour: int
+    minute: int
+    second: int
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("hour", self.hour, 0, 23)
+        _check_int("minute", self.minute, 0, 59)
+        _check_int("second", self.second, 0, 59)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.WRITE_TIME,
+            _to_bcd(self.hour),
+            _to_bcd(self.minute),
+            _to_bcd(self.second),
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, hour, minute, second = packet.data
+        return cls(
+            device_code=device_code,
+            box=box,
+            hour=_from_bcd(hour, "hour"),
+            minute=_from_bcd(minute, "minute"),
+            second=_from_bcd(second, "second"),
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ClockDate(PhysicalMessage):
+    """A device setting or broadcasting the date (physical opcode 0x53).
+
+    The day and two-digit year are BCD. The middle byte packs the day of the
+    week into its top three bits and the month (BCD) into the low five. A
+    packet that doesn't fit decodes as `UnknownMessage` instead.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.WRITE_DATE,)
+
+    year: int
+    """The year, 2000-2099 (only the last two digits are sent)."""
+
+    month: int
+    day: int
+
+    day_of_week: int
+    """The 3-bit day-of-week field as sent. Wednesday was 3 on a real site."""
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("year", self.year, 2000, 2099)
+        _check_int("month", self.month, 1, 12)
+        _check_int("day", self.day, 1, 31)
+        _check_int("day_of_week", self.day_of_week, 0, 7)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.WRITE_DATE,
+            _to_bcd(self.day),
+            self.day_of_week << 5 | _to_bcd(self.month),
+            _to_bcd(self.year - 2000),
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, day, packed, year = packet.data
+        return cls(
+            device_code=device_code,
+            box=box,
+            year=2000 + _from_bcd(year, "year"),
+            month=_from_bcd(packed & 0x1F, "month"),
+            day=_from_bcd(day, "day"),
+            day_of_week=packed >> 5,
+        )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownMessage(Message):
     """A packet aiodynet has no typed message for. It is passed on unchanged."""
@@ -487,6 +1198,25 @@ type AnyMessage = (
     | RequestChannelLevel
     | SetChannelLevel
     | FadeChannelToPreset
+    | AreaCommand
+    | AreaOff
+    | ResetPreset
+    | Panic
+    | Unpanic
+    | AreaToLevel
+    | ChannelOff
+    | ChannelOn
+    | StopFade
+    | FadeChannelToLevel
+    | RestoreSavedPreset
+    | MotionActivitySync
+    | SetUserPreference
+    | RequestUserPreference
+    | UserPreferenceReport
+    | RequestPresetLevel
+    | PresetLevelReport
+    | ClockTime
+    | ClockDate
     | UnknownMessage
 )
 """Every message `decode` can return. Match on it with ``assert_never`` for an
@@ -501,13 +1231,37 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     RequestChannelLevel,
     SetChannelLevel,
     FadeChannelToPreset,
+    AreaCommand,
+    AreaOff,
+    ResetPreset,
+    Panic,
+    Unpanic,
+    AreaToLevel,
+    ChannelOff,
+    ChannelOn,
+    StopFade,
+    FadeChannelToLevel,
+    RestoreSavedPreset,
+    MotionActivitySync,
+    SetUserPreference,
+    RequestUserPreference,
+    UserPreferenceReport,
+    RequestPresetLevel,
+    PresetLevelReport,
 )
 
-_DECODERS: dict[int, Callable[[Packet], AnyMessage]] = {
-    opcode: message_type.from_packet  # type: ignore[misc]
-    for message_type in _LOGICAL_TYPES
-    for opcode in message_type.opcodes
-}
+_PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (ClockTime, ClockDate)
+
+_Decoder = Callable[[Packet], "AnyMessage"]
+_DECODERS: dict[tuple[int, int], _Decoder] = {}
+for _type in _LOGICAL_TYPES:
+    for _opcode in _type.opcodes:
+        # Every concrete class is a member of AnyMessage; mypy can't see that
+        # through the base-class tuple.
+        _DECODERS[SyncType.LOGICAL, _opcode] = cast("_Decoder", _type.from_packet)
+for _ptype in _PHYSICAL_TYPES:
+    for _opcode in _ptype.opcodes:
+        _DECODERS[SyncType.PHYSICAL, _opcode] = cast("_Decoder", _ptype.from_packet)
 
 
 def decode(packet: Packet) -> AnyMessage:
@@ -516,6 +1270,10 @@ def decode(packet: Packet) -> AnyMessage:
     Never raises for a valid `Packet`: anything without a typed message comes
     back as `UnknownMessage`.
     """
-    if packet.is_logical and (decoder := _DECODERS.get(packet.data[3])):
-        return decoder(packet)
+    decoder = _DECODERS.get((packet.sync, packet.data[3]))
+    if decoder is not None:
+        try:
+            return decoder(packet)
+        except ValueError:
+            pass  # bytes that don't fit the message, such as a time that isn't BCD
     return UnknownMessage(packet=packet)

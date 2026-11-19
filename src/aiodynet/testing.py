@@ -10,7 +10,8 @@ Use it to test code built on aiodynet without hardware::
             await gateway.send(PresetReport(area=1, preset=1))
 
 It can also answer requests the way a real site would: give it a `replies`
-function that maps each received packet to the packets to send back.
+function that maps each received packet to what to send back: messages,
+packets, frames, or raw bytes (for example noise).
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from .messages import Message
 
 type Replies = Callable[
-    [Packet], Iterable[Message | Dynet2Message | Packet | Dynet2Frame]
+    [Packet], Iterable[Message | Dynet2Message | Packet | Dynet2Frame | bytes]
 ]
 
 

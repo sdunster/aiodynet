@@ -146,3 +146,17 @@ async def test_frames_from_clients_are_not_recorded() -> None:
         assert gateway.received == [PresetSelect(area=1, preset=1).to_packet()]
         writer.close()
         await writer.wait_closed()
+
+
+async def test_replies_can_be_raw_bytes() -> None:
+    def noisy(packet: Packet) -> list[bytes]:
+        del packet
+        return [b"\x09\x09"]
+
+    async with FakeGateway(replies=noisy) as gateway:
+        reader, writer = await asyncio.open_connection(gateway.host, gateway.port)
+        writer.write(bytes(PresetSelect(area=1, preset=1).to_packet()))
+        await writer.drain()
+        assert await reader.readexactly(2) == b"\x09\x09"
+        writer.close()
+        await writer.wait_closed()

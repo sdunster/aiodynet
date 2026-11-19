@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-19)
 
 DyNet 2 frames (sync byte 0xAC) are read alongside DyNet 1 packets.
 

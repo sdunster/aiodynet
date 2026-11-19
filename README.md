@@ -188,6 +188,10 @@ or `async with DynetClient(host, port) as client:`.
   `Packet` or `Dynet2Frame` as received and `received.message` its decoded
   meaning. It returns an unsubscribe function. A callback that raises is
   logged and doesn't affect the others.
+- **Noise.** `subscribe_noise(callback)` calls `callback(data)` with each run
+  of bytes that wasn't part of any packet or frame, in stream order, including
+  a partial packet cut off by a dropped connection. It's for tools that keep
+  a full record of the stream.
 - **Connection changes.** `subscribe_connection(callback)` reports drops
   (`False`) and reconnects (`True`). `client.connected` gives the current
   state.

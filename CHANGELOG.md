@@ -18,6 +18,8 @@ DyNet 2 frames (sync byte 0xAC) are read alongside DyNet 1 packets.
   tools can keep noise as evidence rather than only counting it.
 - `PacketFramer` drops bytes that can't start a packet straight away, so
   `discarded` and `pending` update sooner. No packets are gained or lost.
+- `DynetClient.subscribe_noise` passes on bytes that weren't part of any
+  packet or frame, including a partial packet cut off by a disconnect.
 - `PacketFramer.reset` reports the partial packet or frame it drops through
   `on_discard` and `discarded`.
 

@@ -9,6 +9,7 @@ channels, presets and levels as they appear on the bus.
 from .client import (
     ConnectionCallback,
     DynetClient,
+    NoiseCallback,
     PacketCallback,
     Received,
     check_connection,
@@ -121,6 +122,7 @@ __all__ = [
     "LogicalMessage",
     "Message",
     "MotionActivitySync",
+    "NoiseCallback",
     "NotConnectedError",
     "OccupancyDetectionAllPresets",
     "Opcode",

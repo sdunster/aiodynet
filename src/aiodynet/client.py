@@ -58,6 +58,7 @@ class Received:
 
 type PacketCallback = Callable[[Received], None]
 type ConnectionCallback = Callable[[bool], None]
+type NoiseCallback = Callable[[bytes], None]
 
 
 async def check_connection(
@@ -161,6 +162,7 @@ class DynetClient:
 
         self._packet_callbacks: list[PacketCallback] = []
         self._connection_callbacks: list[ConnectionCallback] = []
+        self._noise_callbacks: list[NoiseCallback] = []
         self._writer: asyncio.StreamWriter | None = None
         self._queue: asyncio.Queue[tuple[bytes, asyncio.Future[None]]] = asyncio.Queue()
         self._run_task: asyncio.Task[None] | None = None
@@ -212,6 +214,7 @@ class DynetClient:
         self._closed = True
         self._packet_callbacks.clear()
         self._connection_callbacks.clear()
+        self._noise_callbacks.clear()
         if self._run_task is not None:
             self._run_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -248,6 +251,16 @@ class DynetClient:
         harmless.
         """
         return self._add(self._packet_callbacks, callback)
+
+    def subscribe_noise(self, callback: NoiseCallback) -> Callable[[], None]:
+        """Call `callback` with bytes read that weren't part of any packet or frame.
+
+        For tools that keep a full record of the stream. Each call gets one run
+        of skipped bytes, in stream order relative to `subscribe` callbacks.
+        That includes a partial packet left over when a connection drops.
+        Returns a function that unsubscribes.
+        """
+        return self._add(self._noise_callbacks, callback)
 
     def subscribe_connection(self, callback: ConnectionCallback) -> Callable[[], None]:
         """Call `callback(True)` on reconnecting and `callback(False)` on a drop.
@@ -373,18 +386,21 @@ class DynetClient:
                 await writer.wait_closed()
 
     async def _read_loop(self, reader: asyncio.StreamReader) -> None:
-        framer = PacketFramer()
-        while True:
-            try:
-                data = await reader.read(_READ_SIZE)
-            except OSError as err:
-                _LOGGER.warning("Connection to %s lost: %s", self.host, err)
-                return
-            if not data:
-                _LOGGER.warning("Gateway %s closed the connection", self.host)
-                return
-            for item in framer.feed(data):
-                self._dispatch(item)
+        framer = PacketFramer(on_discard=self._dispatch_noise)
+        try:
+            while True:
+                try:
+                    data = await reader.read(_READ_SIZE)
+                except OSError as err:
+                    _LOGGER.warning("Connection to %s lost: %s", self.host, err)
+                    return
+                if not data:
+                    _LOGGER.warning("Gateway %s closed the connection", self.host)
+                    return
+                for item in framer.feed(data):
+                    self._dispatch(item)
+        finally:
+            framer.reset()  # report a partial packet cut off by the drop
 
     async def _write_loop(self, writer: asyncio.StreamWriter) -> None:
         while True:
@@ -420,6 +436,13 @@ class DynetClient:
                 callback(received)
             except Exception:
                 _LOGGER.exception("Error in packet callback %r", callback)
+
+    def _dispatch_noise(self, data: bytes) -> None:
+        for callback in tuple(self._noise_callbacks):
+            try:
+                callback(data)
+            except Exception:
+                _LOGGER.exception("Error in noise callback %r", callback)
 
     def _notify_connection(self, *, connected: bool) -> None:
         for callback in tuple(self._connection_callbacks):

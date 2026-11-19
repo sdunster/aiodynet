@@ -245,6 +245,48 @@ async def test_dynet2_frames_reach_subscribers_in_order(
     ]
 
 
+async def test_noise_reaches_noise_subscribers_in_order(
+    gateway: FakeGateway, make_client: ClientFactory
+) -> None:
+    client = make_client()
+    seen: list[object] = []
+    client.subscribe(lambda received: seen.append(received.message))
+    client.subscribe_noise(seen.append)
+    await client.connect()
+    await gateway.wait_for_client()
+
+    preset = PresetSelect(area=1, preset=1)
+    await gateway.send(b"\x09\x00" + bytes(preset.to_packet()) + b"\x1c\x01")
+    await until(lambda: len(seen) == 2)
+    assert seen == [b"\x09\x00", preset]
+
+    # The partial packet left when the gateway drops the connection is noise too.
+    await gateway.disconnect_clients()
+    await until(lambda: len(seen) == 3)
+    assert seen[2] == b"\x1c\x01"
+
+
+async def test_noise_callback_errors_are_contained(
+    gateway: FakeGateway,
+    make_client: ClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = make_client()
+    noise: list[bytes] = []
+
+    def broken(_: bytes) -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    client.subscribe_noise(broken)
+    client.subscribe_noise(noise.append)
+    await client.connect()
+    await gateway.wait_for_client()
+    await gateway.send(b"\x09")
+    await until(lambda: noise == [b"\x09"])
+    assert "Error in noise callback" in caplog.text
+
+
 async def test_unsubscribe(gateway: FakeGateway, make_client: ClientFactory) -> None:
     client = make_client()
     first: list[Received] = []

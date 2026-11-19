@@ -1,6 +1,7 @@
 """Asyncio client for the Signify Dynalite DyNet lighting control bus.
 
-aiodynet reads and writes DyNet 1 packets through a TCP gateway. It knows the
+aiodynet reads and writes DyNet 1 packets through a TCP gateway, and can pass
+DyNet 2 frames through raw. It knows the
 protocol, not your site: there are no devices, rooms or names here, only areas,
 channels, presets and levels as they appear on the bus.
 """
@@ -11,6 +12,13 @@ from .client import (
     PacketCallback,
     Received,
     check_connection,
+)
+from .dynet2 import (
+    DYNET2_MAX_LENGTH,
+    DYNET2_SYNC,
+    Dynet2Frame,
+    dynet2_checksum,
+    dynet2_length,
 )
 from .errors import (
     DynetConnectionError,
@@ -65,6 +73,8 @@ from .packet import PACKET_LENGTH, Packet, SyncType
 from .values import JOIN_ALL, Level
 
 __all__ = [
+    "DYNET2_MAX_LENGTH",
+    "DYNET2_SYNC",
     "JOIN_ALL",
     "MAX_CHANNEL_FADE",
     "MAX_PRESET_FADE",
@@ -81,6 +91,7 @@ __all__ = [
     "ClockDate",
     "ClockTime",
     "ConnectionCallback",
+    "Dynet2Frame",
     "DynetClient",
     "DynetConnectionError",
     "DynetError",
@@ -120,4 +131,6 @@ __all__ = [
     "UserPreferenceReport",
     "check_connection",
     "decode",
+    "dynet2_checksum",
+    "dynet2_length",
 ]

@@ -60,6 +60,7 @@ __all__ = [
     "FadeChannelToLevel",
     "FadeChannelToPreset",
     "FadeScale",
+    "HoldTimerAllPresets",
     "LinearPresetSelect",
     "LogicalMessage",
     "Message",
@@ -112,6 +113,7 @@ class Opcode(IntEnum):
     UNPANIC = 0x18
     MOTION_ACTIVITY_SYNC = 0x2E
     AREA_CASCADING_SYNC = 0x2F
+    HOLD_TIMER_ALL_PRESETS = 0x30
     OCCUPANCY_DETECTION_ALL_PRESETS = 0x31
     SET_USER_PREFERENCE = 0x48
     REQUEST_USER_PREFERENCE = 0x49
@@ -1167,6 +1169,48 @@ class OccupancyDetectionAllPresets(LogicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class HoldTimerAllPresets(LogicalMessage):
+    """Suspend or resume the hold timer for every preset (opcode 0x30).
+
+    The opcode list calls it the corridor holdoff hold timer. The layout
+    matches 0x31 (`OccupancyDetectionAllPresets`), but which value of byte 5
+    means suspend hasn't been checked, so it is kept raw. Byte 4 is unused.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.HOLD_TIMER_ALL_PRESETS,)
+
+    channel: int | None = None
+    """The channel, numbered from 1, or ``None`` for every channel."""
+
+    state_raw: int
+    """Byte 5, suspend or resume. 0x31 uses 0x01 for resume and 0x00 for
+    suspend; this opcode probably does too."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+        _check_int("state_raw", self.state_raw, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            _channel_to_wire(self.channel),
+            Opcode.HOLD_TIMER_ALL_PRESETS,
+            0,
+            self.state_raw,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, _, state, join = packet.data
+        return cls(
+            area=area, channel=_channel_from_wire(channel), state_raw=state, join=join
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PhysicalMessage(Message):
     """A message addressed to a device (sync byte 0x5C)."""
 
@@ -1517,6 +1561,7 @@ type AnyDynet1Message = (
     | UserPreferenceReport
     | RequestPresetLevel
     | PresetLevelReport
+    | HoldTimerAllPresets
     | OccupancyDetectionAllPresets
     | AreaCascadingSync
     | ClockTime
@@ -1561,6 +1606,7 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     PresetLevelReport,
     AreaCascadingSync,
     OccupancyDetectionAllPresets,
+    HoldTimerAllPresets,
 )
 
 _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (

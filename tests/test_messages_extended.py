@@ -24,6 +24,7 @@ from aiodynet import (
     ClockTime,
     FadeChannelToLevel,
     FadeScale,
+    HoldTimerAllPresets,
     Level,
     Message,
     MotionActivitySync,
@@ -124,6 +125,7 @@ ENCODINGS: list[tuple[Message, str]] = [
     ),
     (AreaCascadingSync(area=5, channel=3), "1c05022f0000ff"),
     (OccupancyDetectionAllPresets(area=5, channel=2, resume=True), "1c0501310001ff"),
+    (HoldTimerAllPresets(area=5, state_raw=1), "1c05ff300001ff"),
 ]
 
 
@@ -347,6 +349,13 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
         area=areas,
         channel=channel_or_all,
         resume=st.booleans(),
+        join=joins,
+    ),
+    st.builds(
+        HoldTimerAllPresets,
+        area=areas,
+        channel=channel_or_all,
+        state_raw=byte,
         join=joins,
     ),
 )

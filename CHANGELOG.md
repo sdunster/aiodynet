@@ -19,6 +19,16 @@ DyNet 2 frames (sync byte 0xAC) are read alongside DyNet 1 packets.
 - `PacketFramer` drops bytes that can't start a packet straight away, so
   `discarded` and `pending` update sooner. No packets are gained or lost.
 
+More typed messages, from the opcode list and checked against the
+official DyNet network monitor where possible:
+
+- Logical: `ProgramLevelsToPreset` (0x09), `AreaCascadingSync` (0x2F),
+  `HoldTimerAllPresets` (0x30), `OccupancyDetectionAllPresets` (0x31),
+  `SuspendOccupancyDetection` / `ResumeOccupancyDetection` (0x3A, 0x3B).
+- Physical: `DeviceIdentify` (0x00), `DeviceStatusReport` (0x41),
+  `RequestFirmwareVersion` (0x80).
+- `UserPreferenceReport.temperature` reads preference 0x0C as °C.
+
 Breaking:
 
 - `Received.packet` is now `Received.raw`, a `Packet` or `Dynet2Frame`.

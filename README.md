@@ -117,10 +117,18 @@ in the DyNet tools and on keypads.
 | `StopFade` | 0x76 | Stop a channel, or every channel, mid-fade |
 | `FadeChannelToLevel` | 0x71–0x73 | The newer channel-level opcodes; `scale` names which one |
 | `RestoreSavedPreset` | 0x67 | Return to the preset saved with `SAVE_CURRENT_PRESET` |
+| `ProgramLevelsToPreset` | 0x09 | Store an area's current levels as a given preset (overwrites it) |
 | `MotionActivitySync` | 0x2E | A motion sensor sharing its activity timer |
-| `SetUserPreference`, `RequestUserPreference`, `UserPreferenceReport` | 0x48–0x4A | Device-specific 16-bit preference values |
+| `AreaCascadingSync` | 0x2F | An area's cascading timer keeping linked areas in step |
+| `HoldTimerAllPresets` | 0x30 | Suspend or resume the hold timer for every preset (state kept raw) |
+| `OccupancyDetectionAllPresets` | 0x31 | Suspend or resume occupancy detection for every preset |
+| `SuspendOccupancyDetection`, `ResumeOccupancyDetection` | 0x3A, 0x3B | The same for the current preset only |
+| `SetUserPreference`, `RequestUserPreference`, `UserPreferenceReport` | 0x48–0x4A | Device-specific 16-bit preference values. For preference 0x0C, `UserPreferenceReport.temperature` gives °C |
 | `RequestPresetLevel`, `PresetLevelReport` | 0x91, 0x92 | The level a channel has stored for a preset |
+| `DeviceIdentify` | physical 0x00 | A device saying what it is, with its firmware version |
+| `DeviceStatusReport` | physical 0x41 | A device status report; the data bytes are kept raw |
 | `ClockTime`, `ClockDate` | physical 0x50, 0x53 | A device setting or broadcasting the time and date |
+| `RequestFirmwareVersion` | physical 0x80 | Ask a device for its firmware version |
 | `RequestSignon` | physical 0x40, sub-opcode 0x0A | Ask a device to sign on. It answers with a DyNet 2 `Dynet2SignonReply` |
 | `UnknownMessage` | anything else | Passed through unchanged, packet included |
 
@@ -238,6 +246,8 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `FadeChannelToPreset` fade unit | Unknown, so it's kept as a raw byte |
 | `MotionActivitySync`, `UserPreferenceReport`, `ClockTime`, `ClockDate` | Opcode list, plus packets captured on a real site (`tests/fixtures/site-capture.jsonl`). The clock bytes are BCD, and the date packs the day of the week into the top three bits of the month byte; both inferred from that capture |
 | All other extended messages | Byte layout from the opcode list only |
+| `AreaCascadingSync`, `OccupancyDetectionAllPresets` (0x01 = resume), `DeviceIdentify` (version as hex digits), `DeviceStatusReport`, `UserPreferenceReport.temperature` (whole degrees + hundredths) | Opcode list, plus real packets decoded by the official DyNet network monitor. Negative temperatures haven't been seen, so they come back as `None` |
+| `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset`, `RequestFirmwareVersion` | Opcode list only |
 | `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device |
 | DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 

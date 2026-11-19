@@ -184,6 +184,9 @@ _SET_CHANNEL_OPCODES = (
     Opcode.SET_CHANNEL_4_LEVEL,
 )
 
+_TEMPERATURE_PREFERENCE = 0x0C
+"""The user preference that holds a temperature."""
+
 ALL_CHANNELS = 0xFF
 """The wire value some opcodes use for "every channel in the area"."""
 
@@ -988,6 +991,22 @@ class UserPreferenceReport(_UserPreferenceMessage):
 
     opcode: ClassVar[int] = Opcode.REPORT_USER_PREFERENCE
     opcodes: ClassVar[tuple[int, ...]] = (Opcode.REPORT_USER_PREFERENCE,)
+
+    @property
+    def temperature(self) -> float | None:
+        """The temperature in °C, for preference 0x0C (temperature).
+
+        Byte 4 is whole degrees and byte 5 hundredths (0-99): the official
+        DyNet network monitor shows ``1b 06`` as +27.06 °C. ``None`` for other
+        preferences, for a hundredths byte over 99, and for byte 4 of 0x80 or
+        more, because how negative readings are sent hasn't been seen.
+        """
+        whole, hundredths = self.value >> 8, self.value & 0xFF
+        if self.preference != _TEMPERATURE_PREFERENCE or whole >= 0x80:
+            return None
+        if hundredths > 99:
+            return None
+        return whole + hundredths / 100
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

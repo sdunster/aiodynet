@@ -393,3 +393,24 @@ def test_occupancy_detection_with_an_unknown_state_stays_unknown() -> None:
 def test_occupancy_detection_needs_a_bool() -> None:
     with pytest.raises(TypeError, match="resume must be a bool"):
         OccupancyDetectionAllPresets(area=1, resume=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("raw", "temperature"),
+    [
+        ("1c170c4a1b06ff", 27.06),  # decoded by the official network monitor
+        ("1c130c4a164aff", 22.74),  # the office, 2026-11-19
+        ("1c170c4a1a3bff", 26.59),
+        ("1c170c4a0000ff", 0.0),
+        ("1c170c4a7f63ff", 127.99),
+        ("1c170c4a8000ff", None),  # negative readings: encoding not seen yet
+        ("1c170c4a1b64ff", None),  # hundredths over 99
+        ("1c170d4a1b06ff", None),  # not the temperature preference
+    ],
+)
+def test_temperature(raw: str, temperature: float | None) -> None:
+    report = decode(Packet.from_hex(raw))
+    assert isinstance(report, UserPreferenceReport)
+    assert report.temperature == (
+        None if temperature is None else pytest.approx(temperature)
+    )

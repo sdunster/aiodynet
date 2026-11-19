@@ -64,6 +64,7 @@ __all__ = [
     "LogicalMessage",
     "Message",
     "MotionActivitySync",
+    "OccupancyDetectionAllPresets",
     "Opcode",
     "Panic",
     "PhysicalMessage",
@@ -111,6 +112,7 @@ class Opcode(IntEnum):
     UNPANIC = 0x18
     MOTION_ACTIVITY_SYNC = 0x2E
     AREA_CASCADING_SYNC = 0x2F
+    OCCUPANCY_DETECTION_ALL_PRESETS = 0x31
     SET_USER_PREFERENCE = 0x48
     REQUEST_USER_PREFERENCE = 0x49
     REPORT_USER_PREFERENCE = 0x4A
@@ -1114,6 +1116,57 @@ class AreaCascadingSync(LogicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class OccupancyDetectionAllPresets(LogicalMessage):
+    """Suspend or resume occupancy detection for every preset (opcode 0x31).
+
+    Byte 5 is 0x01 to resume and 0x00 to suspend, confirmed with the official
+    DyNet network monitor. A packet with any other value there decodes as
+    `UnknownMessage`. Byte 4 is unused.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.OCCUPANCY_DETECTION_ALL_PRESETS,)
+
+    channel: int | None = None
+    """The channel, numbered from 1, or ``None`` for every channel (all real
+    packets seen so far)."""
+
+    resume: bool
+    """``True`` to resume detection, ``False`` to suspend it."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+        resume: object = self.resume  # checked at runtime too, for untyped callers
+        if not isinstance(resume, bool):
+            msg = f"resume must be a bool, not {type(resume).__name__}"
+            raise TypeError(msg)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            _channel_to_wire(self.channel),
+            Opcode.OCCUPANCY_DETECTION_ALL_PRESETS,
+            0,
+            int(self.resume),
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, _, state, join = packet.data
+        if state not in {0, 1}:
+            msg = f"suspend/resume byte 0x{state:02x} isn't 0 or 1"
+            raise ValueError(msg)
+        return cls(
+            area=area,
+            channel=_channel_from_wire(channel),
+            resume=state == 1,
+            join=join,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PhysicalMessage(Message):
     """A message addressed to a device (sync byte 0x5C)."""
 
@@ -1464,6 +1517,7 @@ type AnyDynet1Message = (
     | UserPreferenceReport
     | RequestPresetLevel
     | PresetLevelReport
+    | OccupancyDetectionAllPresets
     | AreaCascadingSync
     | ClockTime
     | ClockDate
@@ -1506,6 +1560,7 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     RequestPresetLevel,
     PresetLevelReport,
     AreaCascadingSync,
+    OccupancyDetectionAllPresets,
 )
 
 _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (

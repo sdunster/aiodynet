@@ -27,6 +27,7 @@ from aiodynet import (
     Level,
     Message,
     MotionActivitySync,
+    OccupancyDetectionAllPresets,
     Packet,
     Panic,
     PresetLevelReport,
@@ -64,6 +65,8 @@ SITE_VECTORS: list[tuple[str, AnyMessage]] = [
     ),
     ("1c14ff2f0000ff", AreaCascadingSync(area=20)),
     ("1c18ff2f0000ff", AreaCascadingSync(area=24)),
+    ("1c1aff310001ff", OccupancyDetectionAllPresets(area=26, resume=True)),
+    ("1c1aff310000ff", OccupancyDetectionAllPresets(area=26, resume=False)),
 ]
 
 ENCODINGS: list[tuple[Message, str]] = [
@@ -120,6 +123,7 @@ ENCODINGS: list[tuple[Message, str]] = [
         "5c010253030201",
     ),
     (AreaCascadingSync(area=5, channel=3), "1c05022f0000ff"),
+    (OccupancyDetectionAllPresets(area=5, channel=2, resume=True), "1c0501310001ff"),
 ]
 
 
@@ -338,6 +342,13 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
         day_of_week=st.integers(0, 7),
     ),
     st.builds(AreaCascadingSync, area=areas, channel=channel_or_all, join=joins),
+    st.builds(
+        OccupancyDetectionAllPresets,
+        area=areas,
+        channel=channel_or_all,
+        resume=st.booleans(),
+        join=joins,
+    ),
 )
 
 
@@ -350,3 +361,13 @@ def test_preset_select_is_unchanged() -> None:
     # Registering more opcodes must not disturb the original ones.
     packet = Packet.from_hex("1c1c32010000ff")
     assert decode(packet) == PresetSelect(area=28, preset=2, fade=1)
+
+
+def test_occupancy_detection_with_an_unknown_state_stays_unknown() -> None:
+    packet = Packet.from_hex("1c1aff310002ff")
+    assert decode(packet) == UnknownMessage(packet=packet)
+
+
+def test_occupancy_detection_needs_a_bool() -> None:
+    with pytest.raises(TypeError, match="resume must be a bool"):
+        OccupancyDetectionAllPresets(area=1, resume=1)  # type: ignore[arg-type]

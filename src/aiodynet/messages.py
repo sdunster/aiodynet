@@ -80,9 +80,11 @@ __all__ = [
     "RequestUserPreference",
     "ResetPreset",
     "RestoreSavedPreset",
+    "ResumeOccupancyDetection",
     "SetChannelLevel",
     "SetUserPreference",
     "StopFade",
+    "SuspendOccupancyDetection",
     "UnknownDynet2Message",
     "UnknownMessage",
     "Unpanic",
@@ -115,6 +117,8 @@ class Opcode(IntEnum):
     AREA_CASCADING_SYNC = 0x2F
     HOLD_TIMER_ALL_PRESETS = 0x30
     OCCUPANCY_DETECTION_ALL_PRESETS = 0x31
+    SUSPEND_OCCUPANCY_DETECTION = 0x3A
+    RESUME_OCCUPANCY_DETECTION = 0x3B
     SET_USER_PREFERENCE = 0x48
     REQUEST_USER_PREFERENCE = 0x49
     REPORT_USER_PREFERENCE = 0x4A
@@ -1211,6 +1215,50 @@ class HoldTimerAllPresets(LogicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class _OccupancyDetectionMessage(LogicalMessage):
+    """Suspend or resume occupancy detection for the current preset."""
+
+    opcode: ClassVar[int]
+
+    channel: int | None = None
+    """The channel, numbered from 1, or ``None`` for every channel."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(_channel_to_wire(self.channel), self.opcode, 0, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, _, _, join = packet.data
+        return cls(area=area, channel=_channel_from_wire(channel), join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuspendOccupancyDetection(_OccupancyDetectionMessage):
+    """Suspend occupancy detection for the current preset (opcode 0x3A).
+
+    `OccupancyDetectionAllPresets` does the same for every preset.
+    """
+
+    opcode: ClassVar[int] = Opcode.SUSPEND_OCCUPANCY_DETECTION
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.SUSPEND_OCCUPANCY_DETECTION,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResumeOccupancyDetection(_OccupancyDetectionMessage):
+    """Resume occupancy detection for the current preset (opcode 0x3B)."""
+
+    opcode: ClassVar[int] = Opcode.RESUME_OCCUPANCY_DETECTION
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.RESUME_OCCUPANCY_DETECTION,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PhysicalMessage(Message):
     """A message addressed to a device (sync byte 0x5C)."""
 
@@ -1561,6 +1609,8 @@ type AnyDynet1Message = (
     | UserPreferenceReport
     | RequestPresetLevel
     | PresetLevelReport
+    | SuspendOccupancyDetection
+    | ResumeOccupancyDetection
     | HoldTimerAllPresets
     | OccupancyDetectionAllPresets
     | AreaCascadingSync
@@ -1607,6 +1657,8 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     AreaCascadingSync,
     OccupancyDetectionAllPresets,
     HoldTimerAllPresets,
+    SuspendOccupancyDetection,
+    ResumeOccupancyDetection,
 )
 
 _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (

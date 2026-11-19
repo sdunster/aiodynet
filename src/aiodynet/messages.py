@@ -56,6 +56,7 @@ __all__ = [
     "ClockDate",
     "ClockTime",
     "DeviceIdentify",
+    "DeviceStatusReport",
     "Dynet2Message",
     "Dynet2SignonReply",
     "FadeChannelToLevel",
@@ -153,6 +154,7 @@ class PhysicalOpcode(IntEnum):
 
     DEVICE_IDENTIFY = 0x00
     REQUEST_DEVICE_STATUS = 0x40
+    REPORT_DEVICE_STATUS = 0x41
     WRITE_TIME = 0x50
     WRITE_DATE = 0x53
 
@@ -1520,6 +1522,53 @@ class DeviceIdentify(PhysicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class DeviceStatusReport(PhysicalMessage):
+    """A device status report (physical opcode 0x41 Report Device Status).
+
+    The answer to physical 0x40 Request Device Status. Byte 6 is the
+    sub-opcode, the same as in the request (0x0A is "Do D2 Signon"). What
+    the two data bytes mean depends on the sub-opcode, so they are kept raw.
+    The official DyNet network monitor shows ``5c aa 55 41 00 00 0a`` as
+    "Report Device Status - Do D2 Signon (data 1 0x00, data 2 0x00)",
+    addressed to all devices.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.REPORT_DEVICE_STATUS,)
+
+    sub_opcode: int
+    data1_raw: int = 0
+    data2_raw: int = 0
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("sub_opcode", self.sub_opcode, 0, 0xFF)
+        _check_int("data1_raw", self.data1_raw, 0, 0xFF)
+        _check_int("data2_raw", self.data2_raw, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.REPORT_DEVICE_STATUS,
+            self.data1_raw,
+            self.data2_raw,
+            self.sub_opcode,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, data1, data2, sub_opcode = packet.data
+        return cls(
+            device_code=device_code,
+            box=box,
+            sub_opcode=sub_opcode,
+            data1_raw=data1,
+            data2_raw=data2,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownMessage(Message):
     """A packet aiodynet has no typed message for. It is passed on unchanged."""
 
@@ -1725,6 +1774,7 @@ type AnyDynet1Message = (
     | ClockTime
     | ClockDate
     | RequestSignon
+    | DeviceStatusReport
     | DeviceIdentify
     | UnknownMessage
 )
@@ -1776,6 +1826,7 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     ClockDate,
     RequestSignon,
     DeviceIdentify,
+    DeviceStatusReport,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

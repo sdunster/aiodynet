@@ -23,6 +23,7 @@ from aiodynet import (
     ClockDate,
     ClockTime,
     DeviceIdentify,
+    DeviceStatusReport,
     FadeChannelToLevel,
     FadeScale,
     HoldTimerAllPresets,
@@ -78,6 +79,7 @@ SITE_VECTORS: list[tuple[str, AnyMessage]] = [
             device_code=0xB3, box=42, firmware_major=0x02, firmware_minor=0x11
         ),
     ),
+    ("5caa554100000a", DeviceStatusReport(device_code=0xAA, box=0x55, sub_opcode=0x0A)),
 ]
 
 ENCODINGS: list[tuple[Message, str]] = [
@@ -139,6 +141,12 @@ ENCODINGS: list[tuple[Message, str]] = [
     (SuspendOccupancyDetection(area=5), "1c05ff3a0000ff"),
     (ResumeOccupancyDetection(area=5, channel=1), "1c05003b0000ff"),
     (ProgramLevelsToPreset(area=5, preset=3), "1c0502090000ff"),
+    (
+        DeviceStatusReport(
+            device_code=1, box=2, sub_opcode=0x12, data1_raw=0x16, data2_raw=0x80
+        ),
+        "5c010241168012",
+    ),
 ]
 
 
@@ -385,6 +393,14 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
         firmware_major=byte,
         firmware_minor=byte,
         boot_raw=byte,
+    ),
+    st.builds(
+        DeviceStatusReport,
+        device_code=byte,
+        box=byte,
+        sub_opcode=byte,
+        data1_raw=byte,
+        data2_raw=byte,
     ),
 )
 

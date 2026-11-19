@@ -22,6 +22,7 @@ from aiodynet import (
     ChannelOn,
     ClockDate,
     ClockTime,
+    DeviceIdentify,
     FadeChannelToLevel,
     FadeScale,
     HoldTimerAllPresets,
@@ -71,6 +72,12 @@ SITE_VECTORS: list[tuple[str, AnyMessage]] = [
     ("1c18ff2f0000ff", AreaCascadingSync(area=24)),
     ("1c1aff310001ff", OccupancyDetectionAllPresets(area=26, resume=True)),
     ("1c1aff310000ff", OccupancyDetectionAllPresets(area=26, resume=False)),
+    (
+        "5cb32a00021100",
+        DeviceIdentify(
+            device_code=0xB3, box=42, firmware_major=0x02, firmware_minor=0x11
+        ),
+    ),
 ]
 
 ENCODINGS: list[tuple[Message, str]] = [
@@ -173,7 +180,7 @@ def test_clock_packets_that_do_not_fit_stay_unknown(raw: str) -> None:
 
 
 def test_other_physical_opcodes_stay_unknown() -> None:
-    packet = Packet.from_hex("5c010200000000")
+    packet = Packet.from_hex("5c010202000000")  # 0x02 Reboot Device
     assert isinstance(decode(packet), UnknownMessage)
 
 
@@ -371,6 +378,14 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
     st.builds(
         ProgramLevelsToPreset, area=areas, preset=st.integers(1, 256), join=joins
     ),
+    st.builds(
+        DeviceIdentify,
+        device_code=byte,
+        box=byte,
+        firmware_major=byte,
+        firmware_minor=byte,
+        boot_raw=byte,
+    ),
 )
 
 
@@ -414,3 +429,9 @@ def test_temperature(raw: str, temperature: float | None) -> None:
     assert report.temperature == (
         None if temperature is None else pytest.approx(temperature)
     )
+
+
+def test_device_identify_version() -> None:
+    message = decode(Packet.from_hex("5cb32a00021100"))
+    assert isinstance(message, DeviceIdentify)
+    assert message.firmware_version == "02.11"

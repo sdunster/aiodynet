@@ -55,6 +55,7 @@ __all__ = [
     "ChannelOn",
     "ClockDate",
     "ClockTime",
+    "DeviceIdentify",
     "Dynet2Message",
     "Dynet2SignonReply",
     "FadeChannelToLevel",
@@ -150,6 +151,7 @@ class Opcode(IntEnum):
 class PhysicalOpcode(IntEnum):
     """The physical (0x5C) opcodes aiodynet decodes into typed messages."""
 
+    DEVICE_IDENTIFY = 0x00
     REQUEST_DEVICE_STATUS = 0x40
     WRITE_TIME = 0x50
     WRITE_DATE = 0x53
@@ -1465,6 +1467,59 @@ class RequestSignon(PhysicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class DeviceIdentify(PhysicalMessage):
+    """A device saying what it is (physical opcode 0x00).
+
+    Devices send these in bursts, for example on start-up. The official DyNet
+    network monitor shows ``5c b3 2a 00 02 11 00`` as "Device D5Sen (0xB3)
+    Box 42 v02.11". It doesn't show byte 6 (boot / sign-on), so that is kept
+    raw.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.DEVICE_IDENTIFY,)
+
+    firmware_major: int
+    """The raw firmware major byte. Versions are written in hex; see
+    `firmware_version`."""
+    firmware_minor: int
+    boot_raw: int = 0
+    """Byte 6, "Boot / Signon" in the opcode list."""
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("firmware_major", self.firmware_major, 0, 0xFF)
+        _check_int("firmware_minor", self.firmware_minor, 0, 0xFF)
+        _check_int("boot_raw", self.boot_raw, 0, 0xFF)
+
+    @property
+    def firmware_version(self) -> str:
+        """The firmware version as the network monitor prints it, e.g. ``02.11``."""
+        return f"{self.firmware_major:02x}.{self.firmware_minor:02x}"
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.DEVICE_IDENTIFY,
+            self.firmware_major,
+            self.firmware_minor,
+            self.boot_raw,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, major, minor, boot = packet.data
+        return cls(
+            device_code=device_code,
+            box=box,
+            firmware_major=major,
+            firmware_minor=minor,
+            boot_raw=boot,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownMessage(Message):
     """A packet aiodynet has no typed message for. It is passed on unchanged."""
 
@@ -1670,6 +1725,7 @@ type AnyDynet1Message = (
     | ClockTime
     | ClockDate
     | RequestSignon
+    | DeviceIdentify
     | UnknownMessage
 )
 """Every message `decode` can return for a `Packet`."""
@@ -1719,6 +1775,7 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     ClockTime,
     ClockDate,
     RequestSignon,
+    DeviceIdentify,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

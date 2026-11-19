@@ -303,6 +303,8 @@ def describe(message: AnyMessage) -> str:  # noqa: C901, PLR0911
             return "clock"
         case RequestSignon():
             return "sign-on request"
+        case PhysicalMessage():
+            return "other physical"
         case LogicalMessage():
             return "other logical"
         case Dynet2SignonReply():

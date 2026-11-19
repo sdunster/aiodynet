@@ -8,6 +8,7 @@ channels, presets and levels as they appear on the bus.
 
 from .client import (
     ConnectionCallback,
+    Dynet2Callback,
     DynetClient,
     PacketCallback,
     Received,
@@ -91,6 +92,7 @@ __all__ = [
     "ClockDate",
     "ClockTime",
     "ConnectionCallback",
+    "Dynet2Callback",
     "Dynet2Frame",
     "DynetClient",
     "DynetConnectionError",

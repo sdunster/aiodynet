@@ -67,6 +67,27 @@ Packet.from_hex("1c0c64000000ff75")  # checksum checked
 Packet.from_bytes(raw_8_bytes)  # raises InvalidPacketError if bad
 ```
 
+### DyNet 2 frames
+
+Gateways also send variable-length DyNet 2 frames on the same TCP stream: a
+greeting after every new connection, and device sign-on replies. Each starts
+with `0xAC`, is `(byte 1 + 1) * 4` bytes long and ends in a two-byte
+Fletcher-16 checksum (taken mod 256). aiodynet frames them and checks the
+checksum, but doesn't decode them, because their layout isn't documented. A
+`Dynet2Frame` holds one raw:
+
+```python
+from aiodynet import Dynet2Frame
+
+frame = Dynet2Frame.from_hex("ac 02 80 da 00 01 b3 00 2a 0a")  # checksum added
+frame.body  # the bytes between the length byte and the checksum
+```
+
+`PacketFramer.feed` and `DynetClient.subscribe` only ever give you DyNet 1
+packets; frames are stepped over whole, so their bytes can't be mistaken for
+packets. To see them, use `PacketFramer.feed_all` or
+`DynetClient.subscribe_dynet2`. aiodynet can't send DyNet 2.
+
 ### Messages
 
 Each message class maps to exactly one wire form. Fields are keyword-only and
@@ -151,6 +172,8 @@ or `async with DynetClient(host, port) as client:`.
   loop for every packet, where `received.packet` is the raw packet and
   `received.message` its decoded meaning. It returns an unsubscribe function.
   A callback that raises is logged and doesn't affect the others.
+- **DyNet 2.** `subscribe_dynet2(callback)` calls `callback(frame)` with each
+  raw `Dynet2Frame`. Packet subscribers never see them.
 - **Connection changes.** `subscribe_connection(callback)` reports drops
   (`False`) and reconnects (`True`). `client.connected` gives the current
   state.
@@ -208,6 +231,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `FadeChannelToPreset` fade unit | Unknown, so it's kept as a raw byte |
 | `MotionActivitySync`, `UserPreferenceReport`, `ClockTime`, `ClockDate` | Opcode list, plus packets captured on a real site (`tests/fixtures/site-capture.jsonl`). The clock bytes are BCD, and the date packs the day of the week into the top three bits of the month byte; both inferred from that capture |
 | All other extended messages | Byte layout from the opcode list only |
+| DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 
 The `dynalite-devices` comparison was made black-box: by driving its public
 API against a fake gateway and recording the bytes, without reading its source.

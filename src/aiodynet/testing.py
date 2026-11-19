@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Self
 
+from .dynet2 import Dynet2Frame
 from .framing import PacketFramer
 from .packet import Packet
 
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
     from .messages import Message
 
-type Replies = Callable[[Packet], Iterable[Message | Packet]]
+type Replies = Callable[[Packet], Iterable[Message | Packet | Dynet2Frame]]
 
 
 class FakeGateway:
@@ -101,8 +102,8 @@ class FakeGateway:
         async with asyncio.timeout(timeout):
             await self._connected.wait()
 
-    async def send(self, *items: Message | Packet | bytes) -> None:
-        """Send messages, packets or raw bytes to every connected client."""
+    async def send(self, *items: Message | Packet | Dynet2Frame | bytes) -> None:
+        """Send messages, packets, DyNet 2 frames or raw bytes to every client."""
         data = b"".join(_to_bytes(item) for item in items)
         for writer in tuple(self._writers):
             writer.write(data)
@@ -166,9 +167,9 @@ class FakeGateway:
                 await writer.wait_closed()
 
 
-def _to_bytes(item: Message | Packet | bytes) -> bytes:
+def _to_bytes(item: Message | Packet | Dynet2Frame | bytes) -> bytes:
     if isinstance(item, bytes):
         return item
-    if isinstance(item, Packet):
+    if isinstance(item, (Packet, Dynet2Frame)):
         return bytes(item)
     return bytes(item.to_packet())

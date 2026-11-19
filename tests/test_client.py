@@ -9,6 +9,7 @@ import pytest
 
 from aiodynet import (
     ChannelLevelReport,
+    Dynet2Frame,
     DynetClient,
     DynetConnectionError,
     Level,
@@ -202,6 +203,66 @@ async def test_partial_packets_and_noise(
     await gateway.send(raw[3:])
     await until(lambda: len(seen) == 1)
     assert seen[0].message == PresetSelect(area=1, preset=1)
+
+
+GREETING = Dynet2Frame.from_hex(
+    "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+)
+
+
+async def test_dynet2_frames_go_only_to_dynet2_subscribers(
+    gateway: FakeGateway, make_client: ClientFactory
+) -> None:
+    client = make_client()
+    packets: list[Received] = []
+    frames: list[Dynet2Frame] = []
+    client.subscribe(packets.append)
+    client.subscribe_dynet2(frames.append)
+    await client.connect()
+    await gateway.wait_for_client()
+
+    await gateway.send(GREETING, PresetSelect(area=1, preset=1), GREETING)
+    await until(lambda: len(frames) == 2 and len(packets) == 1)
+    assert frames == [GREETING, GREETING]
+    assert packets[0].message == PresetSelect(area=1, preset=1)
+
+
+async def test_dynet2_callback_errors_are_contained(
+    gateway: FakeGateway,
+    make_client: ClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = make_client()
+    frames: list[Dynet2Frame] = []
+
+    def broken(_: Dynet2Frame) -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    unsubscribe = client.subscribe_dynet2(broken)
+    client.subscribe_dynet2(frames.append)
+    await client.connect()
+    await gateway.wait_for_client()
+    await gateway.send(GREETING)
+    await until(lambda: len(frames) == 1)
+    assert "Error in DyNet 2 callback" in caplog.text
+
+    unsubscribe()
+    await gateway.send(GREETING)
+    await until(lambda: len(frames) == 2)
+
+
+async def test_without_a_dynet2_subscriber_frames_are_ignored(
+    gateway: FakeGateway, make_client: ClientFactory
+) -> None:
+    client = make_client()
+    packets: list[Received] = []
+    client.subscribe(packets.append)
+    await client.connect()
+    await gateway.wait_for_client()
+    await gateway.send(GREETING, PresetSelect(area=1, preset=1))
+    await until(lambda: len(packets) == 1)
+    assert packets[0].message == PresetSelect(area=1, preset=1)
 
 
 async def test_unsubscribe(gateway: FakeGateway, make_client: ClientFactory) -> None:

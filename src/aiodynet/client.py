@@ -9,6 +9,7 @@ import socket
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Self, overload
 
+from .dynet2 import Dynet2Frame
 from .errors import DynetConnectionError, NotConnectedError
 from .framing import PacketFramer
 from .messages import (
@@ -52,6 +53,7 @@ class Received:
 
 type PacketCallback = Callable[[Received], None]
 type ConnectionCallback = Callable[[bool], None]
+type Dynet2Callback = Callable[[Dynet2Frame], None]
 
 
 async def check_connection(
@@ -155,6 +157,7 @@ class DynetClient:
 
         self._packet_callbacks: list[PacketCallback] = []
         self._connection_callbacks: list[ConnectionCallback] = []
+        self._dynet2_callbacks: list[Dynet2Callback] = []
         self._writer: asyncio.StreamWriter | None = None
         self._queue: asyncio.Queue[tuple[bytes, asyncio.Future[None]]] = asyncio.Queue()
         self._run_task: asyncio.Task[None] | None = None
@@ -206,6 +209,7 @@ class DynetClient:
         self._closed = True
         self._packet_callbacks.clear()
         self._connection_callbacks.clear()
+        self._dynet2_callbacks.clear()
         if self._run_task is not None:
             self._run_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -239,6 +243,16 @@ class DynetClient:
         Returns a function that unsubscribes. Calling it twice is harmless.
         """
         return self._add(self._packet_callbacks, callback)
+
+    def subscribe_dynet2(self, callback: Dynet2Callback) -> Callable[[], None]:
+        """Call `callback` with every DyNet 2 frame read from the bus, raw.
+
+        Gateways send these alongside DyNet 1 packets, for example a greeting
+        after each connect and device sign-on replies. They aren't decoded,
+        and `subscribe` callbacks never see them. Returns a function that
+        unsubscribes.
+        """
+        return self._add(self._dynet2_callbacks, callback)
 
     def subscribe_connection(self, callback: ConnectionCallback) -> Callable[[], None]:
         """Call `callback(True)` on reconnecting and `callback(False)` on a drop.
@@ -362,8 +376,11 @@ class DynetClient:
             if not data:
                 _LOGGER.warning("Gateway %s closed the connection", self.host)
                 return
-            for packet in framer.feed(data):
-                self._dispatch(packet)
+            for item in framer.feed_all(data):
+                if isinstance(item, Packet):
+                    self._dispatch(item)
+                else:
+                    self._dispatch_dynet2(item)
 
     async def _write_loop(self, writer: asyncio.StreamWriter) -> None:
         while True:
@@ -399,6 +416,14 @@ class DynetClient:
                 callback(received)
             except Exception:
                 _LOGGER.exception("Error in packet callback %r", callback)
+
+    def _dispatch_dynet2(self, frame: Dynet2Frame) -> None:
+        _LOGGER.debug("Received DyNet 2 frame (%d bytes) %s", len(frame), frame.hex())
+        for callback in tuple(self._dynet2_callbacks):
+            try:
+                callback(frame)
+            except Exception:
+                _LOGGER.exception("Error in DyNet 2 callback %r", callback)
 
     def _notify_connection(self, *, connected: bool) -> None:
         for callback in tuple(self._connection_callbacks):

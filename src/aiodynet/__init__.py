@@ -15,9 +15,12 @@ from .client import (
     check_connection,
 )
 from .dynet2 import (
+    DYNET2_ALL_DEVICES,
     DYNET2_MAX_LENGTH,
     DYNET2_SYNC,
     Dynet2Frame,
+    Dynet2SignonReply,
+    decode_dynet2,
     dynet2_checksum,
     dynet2_length,
 )
@@ -74,6 +77,7 @@ from .packet import PACKET_LENGTH, Packet, SyncType
 from .values import JOIN_ALL, Level
 
 __all__ = [
+    "DYNET2_ALL_DEVICES",
     "DYNET2_MAX_LENGTH",
     "DYNET2_SYNC",
     "JOIN_ALL",
@@ -94,6 +98,7 @@ __all__ = [
     "ConnectionCallback",
     "Dynet2Callback",
     "Dynet2Frame",
+    "Dynet2SignonReply",
     "DynetClient",
     "DynetConnectionError",
     "DynetError",
@@ -133,6 +138,7 @@ __all__ = [
     "UserPreferenceReport",
     "check_connection",
     "decode",
+    "decode_dynet2",
     "dynet2_checksum",
     "dynet2_length",
 ]

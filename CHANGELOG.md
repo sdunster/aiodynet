@@ -7,6 +7,9 @@
   instead of treating them as noise, and yields them from the new
   `feed_all`. `DynetClient.subscribe_dynet2` passes them to callbacks.
   Existing `feed` and `subscribe` callers still get only DyNet 1 packets.
+- `Dynet2SignonReply` and `decode_dynet2()`: the DyNet 2 "Reply Device
+  Signon" a device sends when asked, with its address, firmware version and
+  maximum packet sizes. `DYNET2_ALL_DEVICES` is the all-devices address.
 - `PacketFramer(on_discard=...)` is called with each run of skipped bytes, so
   tools can keep noise as evidence rather than only counting it.
 - `PacketFramer` drops bytes that can't start a packet straight away, so

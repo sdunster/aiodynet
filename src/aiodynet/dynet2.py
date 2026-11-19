@@ -154,3 +154,150 @@ class Dynet2Frame:
     def __repr__(self) -> str:
         """Return a short, readable representation."""
         return f"Dynet2Frame({self.hex()})"
+
+
+DYNET2_ALL_DEVICES: Final = (0xAA, 0x5555)
+"""The DyNet 2 destination (device code, box) that means every device."""
+
+_REPLY_CLASS: Final = 0x81
+_SIGNON_TYPE: Final = 0x01
+_SIGNON_REPLY_LENGTH: Final = 20
+
+
+def _check(name: str, value: int, low: int, high: int) -> None:
+    if not low <= value <= high:
+        msg = f"{name} must be {low}-{high}, got {value}"
+        raise InvalidPacketError(msg)
+
+
+def _check_size(name: str, value: int) -> None:
+    if value % 4 or not DYNET2_MIN_LENGTH <= value <= DYNET2_MAX_LENGTH:
+        msg = f"{name} must be a multiple of 4 from 4 to 1024, got {value}"
+        raise InvalidPacketError(msg)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2SignonReply:
+    """A device announcing itself: the DyNet 2 "Reply Device Signon".
+
+    A device sends one when it gets a DyNet 1 physical 0x40 Request Device
+    Status with sub-opcode 0x0A ("Do D2 Signon") addressed to it. The layout,
+    checked field by field against the official DyNet network monitor::
+
+        ac 04 | 81 | source: dev box box | target: dev box box | 01 | rr rr
+              | firmware: major minor | max rx | max tx | port | slave | C2 C1
+
+    Byte 2 = 0x81 is a reply. A 20-byte reply with byte 9 = 0x01 is taken to be
+    a sign-on, because another 0x81 reply seen on the bus has 0x0A there and
+    isn't a sign-on. That rule rests on one confirmed frame. Bytes 10-11
+    (``rr``) are unknown and are kept raw.
+    """
+
+    device_code: int
+    """The device type code of the device signing on (0xB3 is a D5Sen)."""
+    box: int
+    """Its box number, 0-65535."""
+    target_device_code: int = DYNET2_ALL_DEVICES[0]
+    """Who the reply is addressed to. 0xAA box 0x5555 means every device."""
+    target_box: int = DYNET2_ALL_DEVICES[1]
+    firmware_major: int
+    """The raw firmware major byte. Versions are written in hex, 0x02 0x11 =
+    "02.11"; see `firmware_version`."""
+    firmware_minor: int
+    max_rx_size: int
+    """The largest packet the device accepts, in bytes."""
+    max_tx_size: int
+    """The largest packet the device sends, in bytes."""
+    port: int = 0
+    slave: int = 0
+    """The slave device number."""
+    reserved_raw: bytes = b"\x00\x00"
+    """Bytes 10-11, meaning unknown."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        for name in ("device_code", "target_device_code", "port", "slave"):
+            _check(name, getattr(self, name), 0, 0xFF)
+        for name in ("firmware_major", "firmware_minor"):
+            _check(name, getattr(self, name), 0, 0xFF)
+        for name in ("box", "target_box"):
+            _check(name, getattr(self, name), 0, 0xFFFF)
+        _check_size("max_rx_size", self.max_rx_size)
+        _check_size("max_tx_size", self.max_tx_size)
+        reserved: object = self.reserved_raw  # checked at runtime, for untyped callers
+        if not isinstance(reserved, bytes) or len(reserved) != 2:
+            msg = f"reserved_raw must be 2 bytes, got {reserved!r}"
+            raise InvalidPacketError(msg)
+
+    @property
+    def firmware_version(self) -> str:
+        """The firmware version as the network monitor prints it, e.g. ``02.11``."""
+        return f"{self.firmware_major:02x}.{self.firmware_minor:02x}"
+
+    @property
+    def to_all_devices(self) -> bool:
+        """Whether the reply is addressed to every device."""
+        return (self.target_device_code, self.target_box) == DYNET2_ALL_DEVICES
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a sign-on reply. Raises `InvalidPacketError` if it isn't one."""
+        if not cls.matches(frame):
+            msg = f"Not a DyNet 2 sign-on reply: {frame.hex()}"
+            raise InvalidPacketError(msg)
+        b = frame.body
+        return cls(
+            device_code=b[1],
+            box=int.from_bytes(b[2:4]),
+            target_device_code=b[4],
+            target_box=int.from_bytes(b[5:7]),
+            reserved_raw=b[8:10],
+            firmware_major=b[10],
+            firmware_minor=b[11],
+            max_rx_size=(b[12] + 1) * 4,
+            max_tx_size=(b[13] + 1) * 4,
+            port=b[14],
+            slave=b[15],
+        )
+
+    @staticmethod
+    def matches(frame: Dynet2Frame) -> bool:
+        """Whether `frame` has the shape of a sign-on reply."""
+        body = frame.body
+        return (
+            len(frame) == _SIGNON_REPLY_LENGTH
+            and body[0] == _REPLY_CLASS
+            and body[7] == _SIGNON_TYPE
+        )
+
+    def to_frame(self) -> Dynet2Frame:
+        """Build the frame, for example to play a device in tests."""
+        body = (
+            bytes((_REPLY_CLASS, self.device_code))
+            + self.box.to_bytes(2)
+            + bytes((self.target_device_code,))
+            + self.target_box.to_bytes(2)
+            + bytes((_SIGNON_TYPE,))
+            + self.reserved_raw
+            + bytes(
+                (
+                    self.firmware_major,
+                    self.firmware_minor,
+                    self.max_rx_size // 4 - 1,
+                    self.max_tx_size // 4 - 1,
+                    self.port,
+                    self.slave,
+                )
+            )
+        )
+        return Dynet2Frame.build(body)
+
+
+def decode_dynet2(frame: Dynet2Frame) -> Dynet2SignonReply | None:
+    """Return the typed meaning of a DyNet 2 frame, or ``None`` if unknown.
+
+    Only sign-on replies are understood so far.
+    """
+    if Dynet2SignonReply.matches(frame):
+        return Dynet2SignonReply.from_frame(frame)
+    return None

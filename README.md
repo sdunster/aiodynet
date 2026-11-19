@@ -83,6 +83,18 @@ frame = Dynet2Frame.from_hex("ac 02 80 da 00 01 b3 00 2a 0a")  # checksum added
 frame.body  # the bytes between the length byte and the checksum
 ```
 
+One kind of frame is understood: the sign-on reply a device sends when it gets
+a DyNet 1 "Do D2 Signon" request (physical opcode 0x40, sub-opcode 0x0A)
+addressed to it. `decode_dynet2(frame)` returns a `Dynet2SignonReply`, which
+gives the device code and box, firmware version and maximum packet sizes, or
+`None` for any other frame.
+
+```python
+reply = decode_dynet2(frame)
+if reply is not None:
+    print(f"0x{reply.device_code:02x}/{reply.box} v{reply.firmware_version}")
+```
+
 `PacketFramer.feed` and `DynetClient.subscribe` only ever give you DyNet 1
 packets; frames are stepped over whole, so their bytes can't be mistaken for
 packets. To see them, use `PacketFramer.feed_all` or
@@ -231,6 +243,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `FadeChannelToPreset` fade unit | Unknown, so it's kept as a raw byte |
 | `MotionActivitySync`, `UserPreferenceReport`, `ClockTime`, `ClockDate` | Opcode list, plus packets captured on a real site (`tests/fixtures/site-capture.jsonl`). The clock bytes are BCD, and the date packs the day of the week into the top three bits of the month byte; both inferred from that capture |
 | All other extended messages | Byte layout from the opcode list only |
+| `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device |
 | DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 
 The `dynalite-devices` comparison was made black-box: by driving its public

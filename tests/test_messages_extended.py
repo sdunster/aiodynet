@@ -36,6 +36,7 @@ from aiodynet import (
     PresetLevelReport,
     PresetSelect,
     ProgramLevelsToPreset,
+    RequestFirmwareVersion,
     RequestPresetLevel,
     RequestUserPreference,
     ResetPreset,
@@ -147,6 +148,7 @@ ENCODINGS: list[tuple[Message, str]] = [
         ),
         "5c010241168012",
     ),
+    (RequestFirmwareVersion(device_code=0xB3, box=42), "5cb32a80000000"),
 ]
 
 
@@ -402,6 +404,7 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
         data1_raw=byte,
         data2_raw=byte,
     ),
+    st.builds(RequestFirmwareVersion, device_code=byte, box=byte, processor_id=byte),
 )
 
 

@@ -77,6 +77,7 @@ __all__ = [
     "PresetSelect",
     "ProgramLevelsToPreset",
     "RequestChannelLevel",
+    "RequestFirmwareVersion",
     "RequestPreset",
     "RequestPresetLevel",
     "RequestSignon",
@@ -157,6 +158,7 @@ class PhysicalOpcode(IntEnum):
     REPORT_DEVICE_STATUS = 0x41
     WRITE_TIME = 0x50
     WRITE_DATE = 0x53
+    REQUEST_FIRMWARE_VERSION = 0x80
 
 
 _DO_D2_SIGNON = 0x0A
@@ -1569,6 +1571,37 @@ class DeviceStatusReport(PhysicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RequestFirmwareVersion(PhysicalMessage):
+    """Ask a device for its firmware version (physical opcode 0x80).
+
+    Bytes 4-5 are unused. Which message answers it hasn't been checked on
+    hardware.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.REQUEST_FIRMWARE_VERSION,)
+
+    processor_id: int = 0
+    """Byte 6: which processor in the device, for devices with more than one."""
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("processor_id", self.processor_id, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.REQUEST_FIRMWARE_VERSION, 0, 0, self.processor_id
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, _, _, processor_id = packet.data
+        return cls(device_code=device_code, box=box, processor_id=processor_id)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownMessage(Message):
     """A packet aiodynet has no typed message for. It is passed on unchanged."""
 
@@ -1774,6 +1807,7 @@ type AnyDynet1Message = (
     | ClockTime
     | ClockDate
     | RequestSignon
+    | RequestFirmwareVersion
     | DeviceStatusReport
     | DeviceIdentify
     | UnknownMessage
@@ -1827,6 +1861,7 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     RequestSignon,
     DeviceIdentify,
     DeviceStatusReport,
+    RequestFirmwareVersion,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

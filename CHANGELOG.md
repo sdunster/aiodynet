@@ -7,6 +7,8 @@
   instead of treating them as noise, and yields them from the new
   `feed_all`. `DynetClient.subscribe_dynet2` passes them to callbacks.
   Existing `feed` and `subscribe` callers still get only DyNet 1 packets.
+- `PacketFramer(on_discard=...)` is called with each run of skipped bytes, so
+  tools can keep noise as evidence rather than only counting it.
 - `PacketFramer` drops bytes that can't start a packet straight away, so
   `discarded` and `pending` update sooner. No packets are gained or lost.
 

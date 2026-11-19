@@ -16,7 +16,7 @@ from .dynet2 import (
 from .packet import PACKET_LENGTH, Packet, SyncType, checksum
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,8 +54,17 @@ class PacketFramer:
     Raise the limit (up to 1024) if a site sends longer frames.
     """
 
-    def __init__(self, *, max_dynet2_length: int = DEFAULT_MAX_DYNET2_LENGTH) -> None:
-        """Start with an empty buffer."""
+    def __init__(
+        self,
+        *,
+        max_dynet2_length: int = DEFAULT_MAX_DYNET2_LENGTH,
+        on_discard: Callable[[bytes], None] | None = None,
+    ) -> None:
+        """Start with an empty buffer.
+
+        `on_discard`, if given, is called with each run of bytes skipped to get
+        back in step, for tools that want to keep the noise as evidence.
+        """
         if not DYNET2_MIN_LENGTH <= max_dynet2_length <= DYNET2_MAX_LENGTH:
             msg = (
                 f"max_dynet2_length must be {DYNET2_MIN_LENGTH}-{DYNET2_MAX_LENGTH}, "
@@ -63,6 +72,7 @@ class PacketFramer:
             )
             raise ValueError(msg)
         self._max_dynet2_length = max_dynet2_length
+        self._on_discard = on_discard
         self._buffer = bytearray()
         self.discarded = 0
         """How many bytes were skipped to get back in step, in total."""
@@ -151,3 +161,5 @@ class PacketFramer:
         _LOGGER.debug(
             "Skipped %d byte(s) to find a packet: %s", len(data), data.hex(" ")
         )
+        if self._on_discard is not None:
+            self._on_discard(bytes(data))

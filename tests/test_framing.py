@@ -34,6 +34,14 @@ def test_skips_noise_and_logs_it(caplog: pytest.LogCaptureFixture) -> None:
     assert "Skipped 2 byte(s)" in caplog.text
 
 
+def test_on_discard_gets_each_run_of_noise() -> None:
+    runs: list[bytes] = []
+    framer = PacketFramer(on_discard=runs.append)
+    assert list(framer.feed(b"\x09\x00" + bytes(A) + b"\x1c" + bytes(B))) == [A, B]
+    assert list(framer.feed(b"\x07")) == []
+    assert runs == [b"\x09\x00", b"\x1c", b"\x07"]
+
+
 def test_skips_a_corrupt_packet() -> None:
     framer = PacketFramer()
     corrupt = bytearray(bytes(A))

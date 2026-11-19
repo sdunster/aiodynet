@@ -44,6 +44,7 @@ __all__ = [
     "AnyDynet1Message",
     "AnyDynet2Message",
     "AnyMessage",
+    "AreaCascadingSync",
     "AreaCommand",
     "AreaCommandType",
     "AreaOff",
@@ -109,6 +110,7 @@ class Opcode(IntEnum):
     PANIC = 0x17
     UNPANIC = 0x18
     MOTION_ACTIVITY_SYNC = 0x2E
+    AREA_CASCADING_SYNC = 0x2F
     SET_USER_PREFERENCE = 0x48
     REQUEST_USER_PREFERENCE = 0x49
     REPORT_USER_PREFERENCE = 0x4A
@@ -1079,6 +1081,39 @@ class PresetLevelReport(LogicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AreaCascadingSync(LogicalMessage):
+    """An area's cascading timer keeping linked areas in step (opcode 0x2F).
+
+    The opcode list calls this "Corridor Holdoff Synchronise"; the official
+    DyNet network monitor calls it "Area Cascading Synchronise". Areas send
+    it every 30 s or so while the timer runs. Bytes 4-5 are unused.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.AREA_CASCADING_SYNC,)
+
+    channel: int | None = None
+    """The channel, numbered from 1, or ``None`` for every channel (all real
+    packets seen so far)."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            _channel_to_wire(self.channel), Opcode.AREA_CASCADING_SYNC, 0, 0
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, _, _, join = packet.data
+        return cls(area=area, channel=_channel_from_wire(channel), join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PhysicalMessage(Message):
     """A message addressed to a device (sync byte 0x5C)."""
 
@@ -1429,6 +1464,7 @@ type AnyDynet1Message = (
     | UserPreferenceReport
     | RequestPresetLevel
     | PresetLevelReport
+    | AreaCascadingSync
     | ClockTime
     | ClockDate
     | RequestSignon
@@ -1469,6 +1505,7 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     UserPreferenceReport,
     RequestPresetLevel,
     PresetLevelReport,
+    AreaCascadingSync,
 )
 
 _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (

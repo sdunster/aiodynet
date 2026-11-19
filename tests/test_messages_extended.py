@@ -13,6 +13,7 @@ from hypothesis import strategies as st
 
 from aiodynet import (
     AnyMessage,
+    AreaCascadingSync,
     AreaCommand,
     AreaCommandType,
     AreaOff,
@@ -61,6 +62,8 @@ SITE_VECTORS: list[tuple[str, AnyMessage]] = [
             device_code=0xAA, box=0x55, year=2026, month=11, day=18, day_of_week=3
         ),
     ),
+    ("1c14ff2f0000ff", AreaCascadingSync(area=20)),
+    ("1c18ff2f0000ff", AreaCascadingSync(area=24)),
 ]
 
 ENCODINGS: list[tuple[Message, str]] = [
@@ -116,6 +119,7 @@ ENCODINGS: list[tuple[Message, str]] = [
         ClockDate(device_code=1, box=2, year=2001, month=2, day=3, day_of_week=0),
         "5c010253030201",
     ),
+    (AreaCascadingSync(area=5, channel=3), "1c05022f0000ff"),
 ]
 
 
@@ -333,6 +337,7 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
         day=st.integers(1, 31),
         day_of_week=st.integers(0, 7),
     ),
+    st.builds(AreaCascadingSync, area=areas, channel=channel_or_all, join=joins),
 )
 
 

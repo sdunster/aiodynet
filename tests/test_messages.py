@@ -158,6 +158,13 @@ def test_fade_channel_to_preset_all_channels() -> None:
     assert decode(message.to_packet()) == message
 
 
+def test_request_preset_round_trip() -> None:
+    # Also covered by the hypothesis round trip, but only when it happens to
+    # draw a RequestPreset; this keeps coverage from depending on chance.
+    message = RequestPreset(area=3, channel=5, join=0x7F)
+    assert decode(message.to_packet()) == message
+
+
 def test_preset_report_ignores_unused_bytes() -> None:
     assert decode(Packet.from_hex("1c0501620203ff")) == PresetReport(area=5, preset=2)
 

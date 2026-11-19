@@ -3,6 +3,7 @@ import logging
 import socket
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from aiodynet import (
     ChannelLevelReport,
     Dynet2Frame,
+    Dynet2SignonReply,
     DynetClient,
     DynetConnectionError,
     Level,
@@ -20,6 +22,8 @@ from aiodynet import (
     Received,
     RequestChannelLevel,
     RequestPreset,
+    RequestSignon,
+    UnknownDynet2Message,
     UnknownMessage,
     check_connection,
 )
@@ -184,7 +188,7 @@ async def test_dispatches_decoded_packets(
     )
     await until(lambda: len(seen) == 2)
     assert seen[0].message == PresetSelect(area=5, preset=2)
-    assert seen[0].packet == PresetSelect(area=5, preset=2).to_packet()
+    assert seen[0].raw == PresetSelect(area=5, preset=2).to_packet()
     assert isinstance(seen[1].message, UnknownMessage)
 
 
@@ -208,61 +212,37 @@ async def test_partial_packets_and_noise(
 GREETING = Dynet2Frame.from_hex(
     "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
 )
+D5SEN = Dynet2SignonReply(
+    device_code=0xB3,
+    box=42,
+    firmware_major=0x02,
+    firmware_minor=0x11,
+    max_rx_size=128,
+    max_tx_size=128,
+)
 
 
-async def test_dynet2_frames_go_only_to_dynet2_subscribers(
+async def test_dynet2_frames_reach_subscribers_in_order(
     gateway: FakeGateway, make_client: ClientFactory
 ) -> None:
     client = make_client()
-    packets: list[Received] = []
-    frames: list[Dynet2Frame] = []
-    client.subscribe(packets.append)
-    client.subscribe_dynet2(frames.append)
+    seen: list[Received] = []
+    client.subscribe(seen.append)
     await client.connect()
     await gateway.wait_for_client()
 
-    await gateway.send(GREETING, PresetSelect(area=1, preset=1), GREETING)
-    await until(lambda: len(frames) == 2 and len(packets) == 1)
-    assert frames == [GREETING, GREETING]
-    assert packets[0].message == PresetSelect(area=1, preset=1)
-
-
-async def test_dynet2_callback_errors_are_contained(
-    gateway: FakeGateway,
-    make_client: ClientFactory,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    client = make_client()
-    frames: list[Dynet2Frame] = []
-
-    def broken(_: Dynet2Frame) -> None:
-        msg = "boom"
-        raise RuntimeError(msg)
-
-    unsubscribe = client.subscribe_dynet2(broken)
-    client.subscribe_dynet2(frames.append)
-    await client.connect()
-    await gateway.wait_for_client()
-    await gateway.send(GREETING)
-    await until(lambda: len(frames) == 1)
-    assert "Error in DyNet 2 callback" in caplog.text
-
-    unsubscribe()
-    await gateway.send(GREETING)
-    await until(lambda: len(frames) == 2)
-
-
-async def test_without_a_dynet2_subscriber_frames_are_ignored(
-    gateway: FakeGateway, make_client: ClientFactory
-) -> None:
-    client = make_client()
-    packets: list[Received] = []
-    client.subscribe(packets.append)
-    await client.connect()
-    await gateway.wait_for_client()
-    await gateway.send(GREETING, PresetSelect(area=1, preset=1))
-    await until(lambda: len(packets) == 1)
-    assert packets[0].message == PresetSelect(area=1, preset=1)
+    await gateway.send(GREETING, PresetSelect(area=1, preset=1), D5SEN)
+    await until(lambda: len(seen) == 3)
+    assert [r.raw for r in seen] == [
+        GREETING,
+        PresetSelect(area=1, preset=1).to_packet(),
+        D5SEN.to_frame(),
+    ]
+    assert [r.message for r in seen] == [
+        UnknownDynet2Message(frame=GREETING),
+        PresetSelect(area=1, preset=1),
+        D5SEN,
+    ]
 
 
 async def test_unsubscribe(gateway: FakeGateway, make_client: ClientFactory) -> None:
@@ -543,9 +523,17 @@ async def test_no_callbacks_after_close(
 # Queries
 
 
-def answer(packet: Packet) -> list[PresetReport | ChannelLevelReport | Packet]:
-    """Reply the way a site with area 1 (channels 1-2) would."""
+def answer(
+    packet: Packet,
+) -> list[PresetReport | ChannelLevelReport | Packet | Dynet2Frame]:
+    """Reply the way a site with area 1 (channels 1-2) and a D5Sen would."""
     match packet:
+        case _ if packet == RequestSignon(device_code=0xB3, box=42).to_packet():
+            return [
+                # Another device's sign-on, then the one asked for.
+                replace(D5SEN, box=43).to_frame(),
+                D5SEN.to_frame(),
+            ]
         case _ if packet == RequestPreset(area=1).to_packet():
             return [
                 PresetReport(area=9, preset=3),  # someone else's answer
@@ -553,6 +541,7 @@ def answer(packet: Packet) -> list[PresetReport | ChannelLevelReport | Packet]:
             ]
         case _ if packet == RequestChannelLevel(area=1, channel=2).to_packet():
             return [
+                PresetReport(area=1, preset=4),  # not a level report
                 ChannelLevelReport(
                     area=1, channel=1, target_level=Level.OFF, actual_level=Level.OFF
                 ),
@@ -584,6 +573,21 @@ async def test_query_channel_level() -> None:
         report = await client.query(RequestChannelLevel(area=1, channel=2))
         assert report.channel == 2
         assert report.actual_level == Level(0x80)
+
+
+async def test_query_signon() -> None:
+    async with (
+        FakeGateway(replies=answer) as gateway,
+        DynetClient(gateway.host, gateway.port, send_interval=0) as client,
+    ):
+        reply = await client.query(RequestSignon(device_code=0xB3, box=42))
+        assert reply == D5SEN
+
+
+async def test_query_rejects_a_signon_to_all_devices() -> None:
+    client = DynetClient("127.0.0.1", 1)
+    with pytest.raises(ValueError, match="needs one device"):
+        await client.query(RequestSignon(device_code=0xAA, box=0x55))
 
 
 async def test_query_takes_the_first_match_only() -> None:

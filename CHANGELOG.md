@@ -2,18 +2,28 @@
 
 ## Unreleased
 
-- DyNet 2 frames (sync byte 0xAC) are recognised: `Dynet2Frame` holds one
-  raw, with its checksum checked. `PacketFramer` steps over them whole
-  instead of treating them as noise, and yields them from the new
-  `feed_all`. `DynetClient.subscribe_dynet2` passes them to callbacks.
-  Existing `feed` and `subscribe` callers still get only DyNet 1 packets.
-- `Dynet2SignonReply` and `decode_dynet2()`: the DyNet 2 "Reply Device
-  Signon" a device sends when asked, with its address, firmware version and
-  maximum packet sizes. `DYNET2_ALL_DEVICES` is the all-devices address.
+DyNet 2 frames (sync byte 0xAC) are read alongside DyNet 1 packets.
+
+- `Dynet2Frame` holds one frame raw, with its checksum checked.
+  `PacketFramer.feed` yields frames as well as packets, in arrival order,
+  stepping over each frame whole instead of treating it as noise.
+- `decode` takes a packet or a frame. Frames decode to a `Dynet2Message`:
+  `Dynet2SignonReply` (a device's address, firmware version and maximum
+  packet sizes) or `UnknownDynet2Message`. `AnyMessage` now covers both, and
+  `AnyDynet1Message` / `AnyDynet2Message` name each half.
+- `RequestSignon` (physical 0x40, sub-opcode 0x0A) asks a device to sign on,
+  and `DynetClient.query` waits for its `Dynet2SignonReply`.
+  `DYNET2_ALL_DEVICES` is the DyNet 2 all-devices address.
 - `PacketFramer(on_discard=...)` is called with each run of skipped bytes, so
   tools can keep noise as evidence rather than only counting it.
 - `PacketFramer` drops bytes that can't start a packet straight away, so
   `discarded` and `pending` update sooner. No packets are gained or lost.
+
+Breaking:
+
+- `Received.packet` is now `Received.raw`, a `Packet` or `Dynet2Frame`.
+- `PacketFramer.feed` and `DynetClient.subscribe` callbacks now also get DyNet
+  2 frames, decoded as `Dynet2Message`s.
 
 ## 0.1.0 (2026-11-18)
 

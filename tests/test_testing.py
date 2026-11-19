@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aiodynet import Packet, PresetReport, PresetSelect, RequestPreset
+from aiodynet import Dynet2Frame, Packet, PresetReport, PresetSelect, RequestPreset
 from aiodynet.testing import FakeGateway
 
 
@@ -134,3 +134,15 @@ async def test_reuses_a_given_port() -> None:
         port = first.port
     async with FakeGateway(port=port) as second:
         assert second.port == port
+
+
+async def test_frames_from_clients_are_not_recorded() -> None:
+    frame = Dynet2Frame.build(b"")
+    async with FakeGateway() as gateway:
+        _, writer = await asyncio.open_connection(gateway.host, gateway.port)
+        writer.write(bytes(frame) + bytes(PresetSelect(area=1, preset=1).to_packet()))
+        await writer.drain()
+        assert await gateway.next_packet() == PresetSelect(area=1, preset=1).to_packet()
+        assert gateway.received == [PresetSelect(area=1, preset=1).to_packet()]
+        writer.close()
+        await writer.wait_closed()

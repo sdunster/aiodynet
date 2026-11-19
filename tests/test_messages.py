@@ -17,11 +17,14 @@ from hypothesis import strategies as st
 from aiodynet import (
     MAX_CHANNEL_FADE,
     MAX_PRESET_FADE,
+    AnyDynet1Message,
     AnyMessage,
     AreaPresetMessage,
     ChannelLevelReport,
     ClockDate,
     ClockTime,
+    Dynet2Frame,
+    Dynet2SignonReply,
     FadeChannelToPreset,
     Level,
     LinearPresetSelect,
@@ -33,7 +36,9 @@ from aiodynet import (
     PresetSelect,
     RequestChannelLevel,
     RequestPreset,
+    RequestSignon,
     SetChannelLevel,
+    UnknownDynet2Message,
     UnknownMessage,
     decode,
 )
@@ -281,7 +286,7 @@ def test_unknown_messages_keep_the_packet(raw: str) -> None:
     assert message.to_packet() == packet
 
 
-def describe(message: AnyMessage) -> str:  # noqa: PLR0911
+def describe(message: AnyMessage) -> str:  # noqa: C901, PLR0911
     """Exhaustive match; mypy fails here if a message type is added to AnyMessage."""
     match message:
         case PresetSelect() | LinearPresetSelect() | PresetReport():
@@ -296,9 +301,13 @@ def describe(message: AnyMessage) -> str:  # noqa: PLR0911
             return "channel preset"
         case ClockTime() | ClockDate():
             return "clock"
+        case RequestSignon():
+            return "sign-on request"
         case LogicalMessage():
             return "other logical"
-        case UnknownMessage():
+        case Dynet2SignonReply():
+            return "sign-on reply"
+        case UnknownMessage() | UnknownDynet2Message():
             return "unknown"
         case _:
             assert_never(message)
@@ -309,6 +318,12 @@ def test_exhaustive_match() -> None:
     assert describe(decode(Packet.from_hex("5c0102030405ff"))) == "unknown"
     assert describe(decode(Packet.from_hex("5caa5550175242"))) == "clock"
     assert describe(decode(Packet.from_hex("1c050076000000"))) == "other logical"
+    assert describe(decode(Packet.from_hex("5cb32a4000000a"))) == "sign-on request"
+    signon = Dynet2Frame.from_hex(
+        "ac 04 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 3f b4"
+    )
+    assert describe(decode(signon)) == "sign-on reply"
+    assert describe(decode(Dynet2Frame.build(b""))) == "unknown"
 
 
 levels = st.builds(Level, st.integers(0, 255))
@@ -362,7 +377,7 @@ all_messages: st.SearchStrategy[AnyMessage] = st.one_of(
 
 
 @given(all_messages)
-def test_message_round_trip(message: AnyMessage) -> None:
+def test_message_round_trip(message: AnyDynet1Message) -> None:
     assert decode(message.to_packet()) == message
 
 

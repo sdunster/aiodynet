@@ -6,7 +6,7 @@ class DynetError(Exception):
 
 
 class InvalidPacketError(DynetError, ValueError):
-    """Bytes that are not a valid DyNet 1 packet (wrong length or checksum)."""
+    """Bytes that are not a valid packet or DyNet 2 frame (length or checksum)."""
 
 
 class DynetConnectionError(DynetError, ConnectionError):

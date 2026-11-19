@@ -36,14 +36,14 @@ class PacketFramer:
 
     TCP doesn't keep packet boundaries, so a read can end mid-packet or hold
     several packets. Feed every read to `feed` and it yields each complete
-    DyNet 1 packet. If the stream is out of step (after line noise, or when a
-    connection starts mid-packet), it skips bytes until it finds a known sync
-    byte that starts a packet with a valid checksum.
+    DyNet 1 `Packet` and DyNet 2 `Dynet2Frame`, in the order they arrived. If
+    the stream is out of step (after line noise, or when a connection starts
+    mid-packet), it skips bytes until it finds a known sync byte that starts a
+    packet or frame with a valid checksum.
 
-    Gateways can also send DyNet 2 frames (sync byte 0xAC) on the same stream.
-    The framer steps over each one whole, so the bytes inside it can't be
-    mistaken for DyNet 1 packets and aren't counted as noise. `feed` leaves
-    them out; use `feed_all` to get them as `Dynet2Frame` objects too.
+    Gateways can send DyNet 2 frames (sync byte 0xAC) on the same stream as
+    DyNet 1 packets. Each is taken whole, so the bytes inside it can't be
+    mistaken for DyNet 1 packets and aren't counted as noise.
 
     A 0xAC byte is taken as a frame start only if the checksum at the end of
     the length its next byte gives holds. Until that many bytes have arrived
@@ -76,20 +76,9 @@ class PacketFramer:
         self._buffer = bytearray()
         self.discarded = 0
         """How many bytes were skipped to get back in step, in total."""
-        self.dynet2_frames = 0
-        """How many DyNet 2 frames were found, in total (from either method)."""
 
-    def feed(self, data: bytes) -> Iterator[Packet]:
-        """Add bytes from the stream and yield each complete DyNet 1 packet.
-
-        DyNet 2 frames are stepped over without being yielded.
-        """
-        for item in self.feed_all(data):
-            if isinstance(item, Packet):
-                yield item
-
-    def feed_all(self, data: bytes) -> Iterator[Packet | Dynet2Frame]:
-        """Add bytes from the stream and yield each packet and DyNet 2 frame."""
+    def feed(self, data: bytes) -> Iterator[Packet | Dynet2Frame]:
+        """Add bytes from the stream and yield each complete packet or frame."""
         self._buffer += data
         buffer = self._buffer
         start = 0  # bytes before `start` have been ruled out as noise
@@ -100,7 +89,6 @@ class PacketFramer:
             item: Packet | Dynet2Frame
             if buffer[start] == DYNET2_SYNC:
                 item = Dynet2Frame(bytes(buffer[start:end]))
-                self.dynet2_frames += 1
             else:
                 item = Packet(bytes(buffer[start : end - 1]))
             if start:

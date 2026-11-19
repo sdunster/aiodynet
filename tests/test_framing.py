@@ -79,33 +79,10 @@ packets = st.builds(
 )
 
 
-@given(st.lists(packets, max_size=20), st.data())
-def test_any_split_yields_the_same_packets(
-    items: list[Packet], data: st.DataObject
-) -> None:
-    stream = b"".join(bytes(p) for p in items)
-    cuts = sorted(data.draw(st.lists(st.integers(0, len(stream)), max_size=10)))
-    framer = PacketFramer()
-    out: list[Packet] = []
-    start = 0
-    for cut in [*cuts, len(stream)]:
-        out.extend(framer.feed(stream[start:cut]))
-        start = cut
-    assert out == items
-    assert framer.pending == 0
-
-
 # Noise without sync bytes can never start a packet, so it can't hide one.
 noise = st.lists(
     st.integers(0, 255).map(lambda b: 0 if b in {0x1C, 0x5C, 0xAC} else b)
 ).map(bytes)
-
-
-@given(noise, st.lists(packets, min_size=1, max_size=5))
-def test_recovers_after_noise(garbage: bytes, items: list[Packet]) -> None:
-    framer = PacketFramer()
-    assert list(framer.feed(garbage + b"".join(bytes(p) for p in items))) == items
-    assert framer.discarded == len(garbage)
 
 
 # DyNet 2 frames (specs/dynet2-framing.md). Captured at a real site.
@@ -136,36 +113,36 @@ def join(*items: Packet | Dynet2Frame | bytes) -> bytes:
 )
 def test_captured_streams(items: list[Packet | Dynet2Frame]) -> None:
     framer = PacketFramer()
-    assert list(framer.feed_all(join(*items))) == items
+    assert list(framer.feed(join(*items))) == items
     assert framer.discarded == 0
     assert framer.pending == 0
-    assert framer.dynet2_frames == len(items) - 1
 
 
-def test_feed_steps_over_frames_without_yielding_them(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_frames_are_not_noise(caplog: pytest.LogCaptureFixture) -> None:
     framer = PacketFramer()
     with caplog.at_level(logging.DEBUG):
-        assert list(framer.feed(join(REQUEST, REPLY, AREA_95))) == [AREA_95]
+        assert list(framer.feed(join(REQUEST, REPLY, AREA_95))) == [
+            REQUEST,
+            REPLY,
+            AREA_95,
+        ]
     assert framer.discarded == 0
-    assert framer.dynet2_frames == 2
     assert "Skipped" not in caplog.text
 
 
 def test_shortest_frame() -> None:
     frame = Dynet2Frame.build(b"")
-    assert list(PacketFramer().feed_all(bytes(frame))) == [frame]
+    assert list(PacketFramer().feed(bytes(frame))) == [frame]
 
 
 def test_a_partial_frame_waits_without_skipping() -> None:
     framer = PacketFramer()
     raw = bytes(GREETING)
-    assert list(framer.feed_all(raw[:1])) == []
-    assert list(framer.feed_all(raw[1:19])) == []
+    assert list(framer.feed(raw[:1])) == []
+    assert list(framer.feed(raw[1:19])) == []
     assert framer.pending == 19
     assert framer.discarded == 0
-    assert list(framer.feed_all(raw[19:] + bytes(A))) == [GREETING, A]
+    assert list(framer.feed(raw[19:] + bytes(A))) == [GREETING, A]
 
 
 @pytest.mark.parametrize("frame", [GREETING, REQUEST, REPLY])
@@ -174,16 +151,15 @@ def test_a_bad_frame_checksum_is_noise(frame: Dynet2Frame, index: int) -> None:
     raw = bytearray(bytes(frame))
     raw[index] ^= 0x01
     framer = PacketFramer()
-    assert list(framer.feed_all(bytes(raw) + bytes(AREA_20))) == [AREA_20]
+    assert list(framer.feed(bytes(raw) + bytes(AREA_20))) == [AREA_20]
     assert framer.discarded == len(frame)
-    assert framer.dynet2_frames == 0
 
 
 def test_a_corrupt_length_byte_is_noise() -> None:
     raw = bytearray(bytes(GREETING))
     raw[1] = 0x02  # claims 12 bytes; the checksum there doesn't hold
     framer = PacketFramer()
-    assert list(framer.feed_all(bytes(raw) + bytes(AREA_20))) == [AREA_20]
+    assert list(framer.feed(bytes(raw) + bytes(AREA_20))) == [AREA_20]
     assert framer.discarded == len(GREETING)
 
 
@@ -194,7 +170,7 @@ def test_a_long_length_doesnt_hold_back_packets(
     raw[1] = 0xFF  # claims 1024 bytes
     framer = PacketFramer()
     with caplog.at_level(logging.DEBUG):
-        assert list(framer.feed_all(bytes(raw) + bytes(AREA_20))) == [AREA_20]
+        assert list(framer.feed(bytes(raw) + bytes(AREA_20))) == [AREA_20]
     assert framer.pending == 0
     assert "Not waiting for a 1024-byte DyNet 2 frame (limit 64)" in caplog.text
 
@@ -202,23 +178,23 @@ def test_a_long_length_doesnt_hold_back_packets(
 def test_ac_noise_before_a_packet() -> None:
     # 0xAC then 0x1C claims 116 bytes, over the limit, so A comes out at once.
     framer = PacketFramer()
-    assert list(framer.feed_all(b"\xac" + bytes(A))) == [A]
+    assert list(framer.feed(b"\xac" + bytes(A))) == [A]
     assert framer.discarded == 1
 
 
 def test_ac_noise_with_a_short_length_holds_packets_back_briefly() -> None:
     # 0xAC 0x02 claims 12 bytes, so the framer waits for them before deciding.
     framer = PacketFramer()
-    assert list(framer.feed_all(b"\xac\x02" + bytes(A))) == []
+    assert list(framer.feed(b"\xac\x02" + bytes(A))) == []
     assert framer.pending == 10
-    assert list(framer.feed_all(bytes(B))) == [A, B]
+    assert list(framer.feed(bytes(B))) == [A, B]
     assert framer.discarded == 2
 
 
 def test_ac_inside_a_packet_is_data() -> None:
     area_172 = Packet.from_hex("1c ac 00 00 00 00 ff")
     framer = PacketFramer()
-    assert list(framer.feed_all(join(area_172, GREETING, area_172))) == [
+    assert list(framer.feed(join(area_172, GREETING, area_172))) == [
         area_172,
         GREETING,
         area_172,
@@ -229,15 +205,15 @@ def test_ac_inside_a_packet_is_data() -> None:
 def test_joining_mid_packet_at_an_ac_byte() -> None:
     area_172 = Packet.from_hex("1c ac 00 00 00 00 ff")
     framer = PacketFramer()
-    assert list(framer.feed_all(bytes(area_172)[1:] + bytes(A))) == [A]
+    assert list(framer.feed(bytes(area_172)[1:] + bytes(A))) == [A]
     assert framer.discarded == 7
 
 
 def test_a_higher_limit_accepts_longer_frames() -> None:
     long_frame = Dynet2Frame.build(bytes(96))
-    assert list(PacketFramer().feed_all(bytes(long_frame))) == []
+    assert list(PacketFramer().feed(bytes(long_frame))) == []
     framer = PacketFramer(max_dynet2_length=1024)
-    assert list(framer.feed_all(bytes(long_frame))) == [long_frame]
+    assert list(framer.feed(bytes(long_frame))) == [long_frame]
 
 
 @pytest.mark.parametrize("limit", [3, 1025])
@@ -248,10 +224,10 @@ def test_rejects_a_bad_limit(limit: int) -> None:
 
 def test_reset_drops_a_partial_frame() -> None:
     framer = PacketFramer()
-    list(framer.feed_all(bytes(GREETING)[:7]))
+    list(framer.feed(bytes(GREETING)[:7]))
     framer.reset()
     assert framer.pending == 0
-    assert list(framer.feed_all(bytes(B))) == [B]
+    assert list(framer.feed(bytes(B))) == [B]
 
 
 frames = st.integers(0, 15).flatmap(
@@ -260,7 +236,7 @@ frames = st.integers(0, 15).flatmap(
 
 
 @given(st.lists(packets | frames, max_size=20), st.data())
-def test_any_split_yields_the_same_packets_and_frames(
+def test_any_split_yields_the_same_items(
     items: list[Packet | Dynet2Frame], data: st.DataObject
 ) -> None:
     stream = join(*items)
@@ -269,7 +245,7 @@ def test_any_split_yields_the_same_packets_and_frames(
     out: list[Packet | Dynet2Frame] = []
     start = 0
     for cut in [*cuts, len(stream)]:
-        out.extend(framer.feed_all(stream[start:cut]))
+        out.extend(framer.feed(stream[start:cut]))
         start = cut
     assert out == items
     assert framer.pending == 0
@@ -277,9 +253,9 @@ def test_any_split_yields_the_same_packets_and_frames(
 
 
 @given(noise, st.lists(packets | frames, min_size=1, max_size=5))
-def test_recovers_after_noise_with_frames(
+def test_recovers_after_noise(
     garbage: bytes, items: list[Packet | Dynet2Frame]
 ) -> None:
     framer = PacketFramer()
-    assert list(framer.feed_all(garbage + join(*items))) == items
+    assert list(framer.feed(garbage + join(*items))) == items
     assert framer.discarded == len(garbage)

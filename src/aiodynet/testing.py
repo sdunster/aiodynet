@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Self
 
 from .dynet2 import Dynet2Frame
 from .framing import PacketFramer
+from .messages import Dynet2Message
 from .packet import Packet
 
 if TYPE_CHECKING:
@@ -29,7 +30,9 @@ if TYPE_CHECKING:
 
     from .messages import Message
 
-type Replies = Callable[[Packet], Iterable[Message | Packet | Dynet2Frame]]
+type Replies = Callable[
+    [Packet], Iterable[Message | Dynet2Message | Packet | Dynet2Frame]
+]
 
 
 class FakeGateway:
@@ -102,7 +105,9 @@ class FakeGateway:
         async with asyncio.timeout(timeout):
             await self._connected.wait()
 
-    async def send(self, *items: Message | Packet | Dynet2Frame | bytes) -> None:
+    async def send(
+        self, *items: Message | Dynet2Message | Packet | Dynet2Frame | bytes
+    ) -> None:
         """Send messages, packets, DyNet 2 frames or raw bytes to every client."""
         data = b"".join(_to_bytes(item) for item in items)
         for writer in tuple(self._writers):
@@ -151,6 +156,8 @@ class FakeGateway:
             while data := await reader.read(1024):
                 self.raw_received += data
                 for packet in framer.feed(data):
+                    if not isinstance(packet, Packet):
+                        continue  # a gateway takes only DyNet 1 from clients
                     self.received.append(packet)
                     self._queue.put_nowait(packet)
                     if self._replies is not None:
@@ -167,9 +174,11 @@ class FakeGateway:
                 await writer.wait_closed()
 
 
-def _to_bytes(item: Message | Packet | Dynet2Frame | bytes) -> bytes:
+def _to_bytes(item: Message | Dynet2Message | Packet | Dynet2Frame | bytes) -> bytes:
     if isinstance(item, bytes):
         return item
+    if isinstance(item, Dynet2Message):
+        return bytes(item.to_frame())
     if isinstance(item, (Packet, Dynet2Frame)):
         return bytes(item)
     return bytes(item.to_packet())

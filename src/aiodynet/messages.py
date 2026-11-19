@@ -1,6 +1,9 @@
-"""Typed DyNet messages and the codec between them and `Packet`.
+"""Typed DyNet messages and the codec between them and the wire.
 
 A message says what a packet *means*; a `Packet` is what goes on the wire.
+DyNet 2 frames work the same way: `decode` turns a `Dynet2Frame` into a
+`Dynet2Message`. DyNet 2 messages only come from devices; aiodynet can't send
+them.
 Every message class handles exactly one wire form. Bytes the protocol marks
 as unused are dropped when decoding and sent as zero, so ``decode(p).to_packet()
 == p`` whenever those bytes were zero. The original `Packet` is always passed
@@ -19,8 +22,9 @@ the wire).
 Fields whose unit the DyNet opcode list doesn't pin down are kept raw and named
 ``*_raw``, rather than guessed.
 
-Anything this module has no class for decodes to `UnknownMessage`, which
-keeps the packet, so nothing on the bus is ever lost.
+Anything this module has no class for decodes to `UnknownMessage` (or
+`UnknownDynet2Message` for a frame), which keeps the raw bytes, so nothing on
+the bus is ever lost.
 """
 
 from __future__ import annotations
@@ -29,12 +33,16 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import ClassVar, Self, cast, override
+from typing import ClassVar, Self, cast, overload, override
 
+from .dynet2 import DYNET2_MAX_LENGTH, DYNET2_MIN_LENGTH, Dynet2Frame
 from .packet import Packet, SyncType
 from .values import FADE_UNIT, JOIN_ALL, Level, decode_fade, encode_fade
 
 __all__ = [
+    "DYNET2_ALL_DEVICES",
+    "AnyDynet1Message",
+    "AnyDynet2Message",
     "AnyMessage",
     "AreaCommand",
     "AreaCommandType",
@@ -46,6 +54,8 @@ __all__ = [
     "ChannelOn",
     "ClockDate",
     "ClockTime",
+    "Dynet2Message",
+    "Dynet2SignonReply",
     "FadeChannelToLevel",
     "FadeChannelToPreset",
     "FadeScale",
@@ -63,12 +73,14 @@ __all__ = [
     "RequestChannelLevel",
     "RequestPreset",
     "RequestPresetLevel",
+    "RequestSignon",
     "RequestUserPreference",
     "ResetPreset",
     "RestoreSavedPreset",
     "SetChannelLevel",
     "SetUserPreference",
     "StopFade",
+    "UnknownDynet2Message",
     "UnknownMessage",
     "Unpanic",
     "UserPreferenceReport",
@@ -126,8 +138,18 @@ class Opcode(IntEnum):
 class PhysicalOpcode(IntEnum):
     """The physical (0x5C) opcodes aiodynet decodes into typed messages."""
 
+    REQUEST_DEVICE_STATUS = 0x40
     WRITE_TIME = 0x50
     WRITE_DATE = 0x53
+
+
+_DO_D2_SIGNON = 0x0A
+"""The Request Device Status sub-opcode that asks a device to sign on."""
+
+_ALL_PHYSICAL_DEVICES = (0xAA, 0x55)
+
+DYNET2_ALL_DEVICES = (0xAA, 0x5555)
+"""The DyNet 2 address (device code, box) that means every device."""
 
 
 # Presets 1-8 within a bank use these opcodes, in order.
@@ -1179,6 +1201,38 @@ class ClockDate(PhysicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RequestSignon(PhysicalMessage):
+    """Ask a device to sign on: Request Device Status, "Do D2 Signon".
+
+    Physical opcode 0x40 with sub-opcode 0x0A in byte 6. The device answers
+    with a DyNet 2 `Dynet2SignonReply`, which `DynetClient.query` waits for.
+    Device code 0xAA box 0x55 addresses every device, but at one site no
+    device answered that, while each answered when addressed by itself. A 0x40
+    packet with any other sub-opcode decodes as `UnknownMessage`.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.REQUEST_DEVICE_STATUS,)
+
+    @property
+    def to_all_devices(self) -> bool:
+        """Whether this is addressed to every device (0xAA box 0x55)."""
+        return (self.device_code, self.box) == _ALL_PHYSICAL_DEVICES
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(PhysicalOpcode.REQUEST_DEVICE_STATUS, 0, 0, _DO_D2_SIGNON)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, _, _, sub_opcode = packet.data
+        if sub_opcode != _DO_D2_SIGNON:
+            msg = f"Request Device Status sub-opcode 0x{sub_opcode:02x} isn't sign-on"
+            raise ValueError(msg)
+        return cls(device_code=device_code, box=box)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownMessage(Message):
     """A packet aiodynet has no typed message for. It is passed on unchanged."""
 
@@ -1189,7 +1243,167 @@ class UnknownMessage(Message):
         return self.packet
 
 
-type AnyMessage = (
+# DyNet 2
+
+_REPLY_CLASS = 0x81
+_SIGNON_TYPE = 0x01
+_SIGNON_REPLY_LENGTH = 20
+
+
+def _check_packet_size(name: str, value: object) -> None:
+    _check_int(name, value, DYNET2_MIN_LENGTH, DYNET2_MAX_LENGTH)
+    if cast("int", value) % 4:
+        msg = f"{name} must be a multiple of 4, got {value}"
+        raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2Message(ABC):
+    """Base class for messages carried in DyNet 2 frames.
+
+    These only come from devices. aiodynet can't send DyNet 2, so they aren't
+    `Message`s and `DynetClient.send` doesn't take them.
+    """
+
+    @abstractmethod
+    def to_frame(self) -> Dynet2Frame:
+        """Encode the message as a frame, for example to play a device in tests."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2SignonReply(Dynet2Message):
+    """A device announcing itself, the DyNet 2 "Reply Device Signon".
+
+    A device sends one when it gets a `RequestSignon` addressed to it. The
+    layout, checked field by field against the official DyNet network
+    monitor::
+
+        ac 04 | 81 | source: dev box box | target: dev box box | 01 | rr rr
+              | firmware: major minor | max rx | max tx | port | slave | C2 C1
+
+    Byte 2 = 0x81 is a reply. A 20-byte reply with byte 9 = 0x01 is taken to be
+    a sign-on, because another 0x81 reply seen on the bus has 0x0A there and
+    isn't one. That rule rests on one confirmed frame. Bytes 10-11 (``rr``) are
+    unknown and are kept raw.
+    """
+
+    device_code: int
+    """The device type code of the device signing on (0xB3 is a D5Sen)."""
+    box: int
+    """Its box number, 0-65535."""
+    target_device_code: int = DYNET2_ALL_DEVICES[0]
+    """Who the reply is addressed to. 0xAA box 0x5555 means every device."""
+    target_box: int = DYNET2_ALL_DEVICES[1]
+    firmware_major: int
+    """The raw firmware major byte. Versions are written in hex, 0x02 0x11 =
+    "02.11"; see `firmware_version`."""
+    firmware_minor: int
+    max_rx_size: int
+    """The largest packet the device accepts, in bytes."""
+    max_tx_size: int
+    """The largest packet the device sends, in bytes."""
+    port: int = 0
+    slave: int = 0
+    """The slave device number."""
+    reserved_raw: bytes = b"\x00\x00"
+    """Bytes 10-11, meaning unknown."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        for name in (
+            "device_code",
+            "target_device_code",
+            "firmware_major",
+            "firmware_minor",
+            "port",
+            "slave",
+        ):
+            _check_int(name, getattr(self, name), 0, 0xFF)
+        for name in ("box", "target_box"):
+            _check_int(name, getattr(self, name), 0, 0xFFFF)
+        _check_packet_size("max_rx_size", self.max_rx_size)
+        _check_packet_size("max_tx_size", self.max_tx_size)
+        reserved: object = self.reserved_raw  # checked at runtime too
+        if not isinstance(reserved, bytes):
+            msg = f"reserved_raw must be bytes, not {type(reserved).__name__}"
+            raise TypeError(msg)
+        if len(reserved) != 2:
+            msg = f"reserved_raw must be 2 bytes, got {len(reserved)}"
+            raise ValueError(msg)
+
+    @property
+    def firmware_version(self) -> str:
+        """The firmware version as the network monitor prints it, e.g. ``02.11``."""
+        return f"{self.firmware_major:02x}.{self.firmware_minor:02x}"
+
+    @property
+    def to_all_devices(self) -> bool:
+        """Whether the reply is addressed to every device."""
+        return (self.target_device_code, self.target_box) == DYNET2_ALL_DEVICES
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a sign-on reply. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _SIGNON_REPLY_LENGTH
+            and body[0] == _REPLY_CLASS
+            and body[7] == _SIGNON_TYPE
+        ):
+            msg = f"Not a DyNet 2 sign-on reply: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            reserved_raw=body[8:10],
+            firmware_major=body[10],
+            firmware_minor=body[11],
+            max_rx_size=(body[12] + 1) * 4,
+            max_tx_size=(body[13] + 1) * 4,
+            port=body[14],
+            slave=body[15],
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        body = (
+            bytes((_REPLY_CLASS, self.device_code))
+            + self.box.to_bytes(2)
+            + bytes((self.target_device_code,))
+            + self.target_box.to_bytes(2)
+            + bytes((_SIGNON_TYPE,))
+            + self.reserved_raw
+            + bytes(
+                (
+                    self.firmware_major,
+                    self.firmware_minor,
+                    self.max_rx_size // 4 - 1,
+                    self.max_tx_size // 4 - 1,
+                    self.port,
+                    self.slave,
+                )
+            )
+        )
+        return Dynet2Frame.build(body)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UnknownDynet2Message(Dynet2Message):
+    """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
+
+    Gateways send one (a greeting) a few times after every new connection.
+    """
+
+    frame: Dynet2Frame = field()
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return self.frame
+
+
+type AnyDynet1Message = (
     PresetSelect
     | LinearPresetSelect
     | PresetReport
@@ -1217,8 +1431,15 @@ type AnyMessage = (
     | PresetLevelReport
     | ClockTime
     | ClockDate
+    | RequestSignon
     | UnknownMessage
 )
+"""Every message `decode` can return for a `Packet`."""
+
+type AnyDynet2Message = Dynet2SignonReply | UnknownDynet2Message
+"""Every message `decode` can return for a `Dynet2Frame`."""
+
+type AnyMessage = AnyDynet1Message | AnyDynet2Message
 """Every message `decode` can return. Match on it with ``assert_never`` for an
 exhaustive check."""
 
@@ -1250,9 +1471,13 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     PresetLevelReport,
 )
 
-_PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (ClockTime, ClockDate)
+_PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
+    ClockTime,
+    ClockDate,
+    RequestSignon,
+)
 
-_Decoder = Callable[[Packet], "AnyMessage"]
+_Decoder = Callable[[Packet], "AnyDynet1Message"]
 _DECODERS: dict[tuple[int, int], _Decoder] = {}
 for _type in _LOGICAL_TYPES:
     for _opcode in _type.opcodes:
@@ -1264,12 +1489,24 @@ for _ptype in _PHYSICAL_TYPES:
         _DECODERS[SyncType.PHYSICAL, _opcode] = cast("_Decoder", _ptype.from_packet)
 
 
-def decode(packet: Packet) -> AnyMessage:
-    """Decode a packet into a typed message.
+@overload
+def decode(raw: Packet) -> AnyDynet1Message: ...
+@overload
+def decode(raw: Dynet2Frame) -> AnyDynet2Message: ...
+@overload
+def decode(raw: Packet | Dynet2Frame) -> AnyMessage: ...
+def decode(raw: Packet | Dynet2Frame) -> AnyMessage:
+    """Decode a packet or DyNet 2 frame into a typed message.
 
-    Never raises for a valid `Packet`: anything without a typed message comes
-    back as `UnknownMessage`.
+    Never raises for a valid `Packet` or `Dynet2Frame`: anything without a
+    typed message comes back as `UnknownMessage` or `UnknownDynet2Message`.
     """
+    if isinstance(raw, Dynet2Frame):
+        try:
+            return Dynet2SignonReply.from_frame(raw)
+        except ValueError:
+            return UnknownDynet2Message(frame=raw)
+    packet = raw
     decoder = _DECODERS.get((packet.sync, packet.data[3]))
     if decoder is not None:
         try:

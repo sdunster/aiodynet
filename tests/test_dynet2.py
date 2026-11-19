@@ -1,14 +1,17 @@
 import pytest
 
 from aiodynet import (
-    DYNET2_SYNC,
+    DYNET2_ALL_DEVICES,
     Dynet2Frame,
     Dynet2SignonReply,
     InvalidPacketError,
-    decode_dynet2,
-    dynet2_checksum,
-    dynet2_length,
+    Packet,
+    RequestSignon,
+    UnknownDynet2Message,
+    UnknownMessage,
+    decode,
 )
+from aiodynet.dynet2 import DYNET2_SYNC, dynet2_checksum, dynet2_length
 
 # Captured from the gateway at beachpi on 2026-11-19 (specs/dynet2-framing.md).
 GREETING = "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
@@ -118,19 +121,23 @@ D5SEN = Dynet2SignonReply(
 
 def test_signon_reply_from_the_network_monitor() -> None:
     frame = Dynet2Frame.from_hex(SIGNON)
-    reply = decode_dynet2(frame)
+    reply = decode(frame)
     assert reply == D5SEN
+    assert isinstance(reply, Dynet2SignonReply)
     assert reply.firmware_version == "02.11"
     assert reply.to_all_devices
+    assert (reply.target_device_code, reply.target_box) == DYNET2_ALL_DEVICES
     assert (reply.port, reply.slave, reply.reserved_raw) == (0, 0, b"\x00\x00")
     assert D5SEN.to_frame() == frame
 
 
 @pytest.mark.parametrize("text", [GREETING, REQUEST, REPLY])
-def test_other_frames_are_not_signon_replies(text: str) -> None:
+def test_other_frames_decode_as_unknown(text: str) -> None:
     frame = Dynet2Frame.from_hex(text)
-    assert decode_dynet2(frame) is None
-    with pytest.raises(InvalidPacketError, match="Not a DyNet 2 sign-on reply"):
+    message = decode(frame)
+    assert message == UnknownDynet2Message(frame=frame)
+    assert message.to_frame() == frame
+    with pytest.raises(ValueError, match="Not a DyNet 2 sign-on reply"):
         Dynet2SignonReply.from_frame(frame)
 
 
@@ -149,23 +156,26 @@ def test_signon_reply_round_trip_with_every_field_set() -> None:
         reserved_raw=b"\xab\xcd",
     )
     assert not reply.to_all_devices
-    assert Dynet2SignonReply.from_frame(reply.to_frame()) == reply
+    assert decode(reply.to_frame()) == reply
 
 
 @pytest.mark.parametrize(
-    ("change", "error"),
+    ("change", "error", "kind"),
     [
-        ({"device_code": 256}, "device_code must be 0-255"),
-        ({"box": 65536}, "box must be 0-65535"),
-        ({"firmware_minor": -1}, "firmware_minor must be 0-255"),
-        ({"slave": 300}, "slave must be 0-255"),
-        ({"max_rx_size": 130}, "max_rx_size must be a multiple of 4"),
-        ({"max_tx_size": 0}, "max_tx_size must be a multiple of 4"),
-        ({"reserved_raw": b"\x00"}, "reserved_raw must be 2 bytes"),
-        ({"reserved_raw": "00"}, "reserved_raw must be 2 bytes"),
+        ({"device_code": 256}, "device_code must be 0-255", ValueError),
+        ({"box": 65536}, "box must be 0-65535", ValueError),
+        ({"firmware_minor": -1}, "firmware_minor must be 0-255", ValueError),
+        ({"slave": 300}, "slave must be 0-255", ValueError),
+        ({"max_rx_size": 130}, "max_rx_size must be a multiple of 4", ValueError),
+        ({"max_tx_size": 0}, "max_tx_size must be 4-1024", ValueError),
+        ({"reserved_raw": b"\x00"}, "reserved_raw must be 2 bytes", ValueError),
+        ({"reserved_raw": "00"}, "reserved_raw must be bytes", TypeError),
+        ({"port": "0"}, "port must be an int", TypeError),
     ],
 )
-def test_signon_reply_validation(change: dict[str, object], error: str) -> None:
+def test_signon_reply_validation(
+    change: dict[str, object], error: str, kind: type[Exception]
+) -> None:
     fields: dict[str, object] = {
         "device_code": 0xB3,
         "box": 42,
@@ -174,5 +184,22 @@ def test_signon_reply_validation(change: dict[str, object], error: str) -> None:
         "max_rx_size": 128,
         "max_tx_size": 128,
     } | change
-    with pytest.raises(InvalidPacketError, match=error):
+    with pytest.raises(kind, match=error):
         Dynet2SignonReply(**fields)  # type: ignore[arg-type]
+
+
+# RequestSignon, a DyNet 1 physical packet. Sent to the D5Sen on a real site,
+# where it got the sign-on reply above.
+
+
+def test_request_signon_packet() -> None:
+    request = RequestSignon(device_code=0xB3, box=42)
+    assert request.to_packet().hex() == "5c b3 2a 40 00 00 0a 7d"
+    assert decode(request.to_packet()) == request
+    assert not request.to_all_devices
+    assert RequestSignon(device_code=0xAA, box=0x55).to_all_devices
+
+
+def test_other_device_status_requests_are_unknown() -> None:
+    packet = Packet.from_hex("5c b3 2a 40 00 00 04")  # sub-opcode 0x04, PCB link
+    assert decode(packet) == UnknownMessage(packet=packet)

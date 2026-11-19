@@ -1,29 +1,19 @@
 """Asyncio client for the Signify Dynalite DyNet lighting control bus.
 
-aiodynet reads and writes DyNet 1 packets through a TCP gateway, and can pass
-DyNet 2 frames through raw. It knows the
+aiodynet reads and writes DyNet 1 packets through a TCP gateway, and reads the
+DyNet 2 frames that share the same stream. It knows the
 protocol, not your site: there are no devices, rooms or names here, only areas,
 channels, presets and levels as they appear on the bus.
 """
 
 from .client import (
     ConnectionCallback,
-    Dynet2Callback,
     DynetClient,
     PacketCallback,
     Received,
     check_connection,
 )
-from .dynet2 import (
-    DYNET2_ALL_DEVICES,
-    DYNET2_MAX_LENGTH,
-    DYNET2_SYNC,
-    Dynet2Frame,
-    Dynet2SignonReply,
-    decode_dynet2,
-    dynet2_checksum,
-    dynet2_length,
-)
+from .dynet2 import Dynet2Frame
 from .errors import (
     DynetConnectionError,
     DynetError,
@@ -32,8 +22,11 @@ from .errors import (
 )
 from .framing import PacketFramer
 from .messages import (
+    DYNET2_ALL_DEVICES,
     MAX_CHANNEL_FADE,
     MAX_PRESET_FADE,
+    AnyDynet1Message,
+    AnyDynet2Message,
     AnyMessage,
     AreaCommand,
     AreaCommandType,
@@ -45,6 +38,8 @@ from .messages import (
     ChannelOn,
     ClockDate,
     ClockTime,
+    Dynet2Message,
+    Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
     FadeScale,
@@ -62,12 +57,14 @@ from .messages import (
     RequestChannelLevel,
     RequestPreset,
     RequestPresetLevel,
+    RequestSignon,
     RequestUserPreference,
     ResetPreset,
     RestoreSavedPreset,
     SetChannelLevel,
     SetUserPreference,
     StopFade,
+    UnknownDynet2Message,
     UnknownMessage,
     Unpanic,
     UserPreferenceReport,
@@ -78,12 +75,12 @@ from .values import JOIN_ALL, Level
 
 __all__ = [
     "DYNET2_ALL_DEVICES",
-    "DYNET2_MAX_LENGTH",
-    "DYNET2_SYNC",
     "JOIN_ALL",
     "MAX_CHANNEL_FADE",
     "MAX_PRESET_FADE",
     "PACKET_LENGTH",
+    "AnyDynet1Message",
+    "AnyDynet2Message",
     "AnyMessage",
     "AreaCommand",
     "AreaCommandType",
@@ -96,8 +93,8 @@ __all__ = [
     "ClockDate",
     "ClockTime",
     "ConnectionCallback",
-    "Dynet2Callback",
     "Dynet2Frame",
+    "Dynet2Message",
     "Dynet2SignonReply",
     "DynetClient",
     "DynetConnectionError",
@@ -126,6 +123,7 @@ __all__ = [
     "RequestChannelLevel",
     "RequestPreset",
     "RequestPresetLevel",
+    "RequestSignon",
     "RequestUserPreference",
     "ResetPreset",
     "RestoreSavedPreset",
@@ -133,12 +131,10 @@ __all__ = [
     "SetUserPreference",
     "StopFade",
     "SyncType",
+    "UnknownDynet2Message",
     "UnknownMessage",
     "Unpanic",
     "UserPreferenceReport",
     "check_connection",
     "decode",
-    "decode_dynet2",
-    "dynet2_checksum",
-    "dynet2_length",
 ]

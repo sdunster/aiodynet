@@ -30,7 +30,7 @@ from aiodynet import DynetClient, Level, PresetSelect, Received, SetChannelLevel
 
 
 def show(received: Received) -> None:
-    print(received.packet.hex(), received.message)
+    print(received.raw.hex(), received.message)
 
 
 async def main() -> None:
@@ -72,9 +72,7 @@ Packet.from_bytes(raw_8_bytes)  # raises InvalidPacketError if bad
 Gateways also send variable-length DyNet 2 frames on the same TCP stream: a
 greeting after every new connection, and device sign-on replies. Each starts
 with `0xAC`, is `(byte 1 + 1) * 4` bytes long and ends in a two-byte
-Fletcher-16 checksum (taken mod 256). aiodynet frames them and checks the
-checksum, but doesn't decode them, because their layout isn't documented. A
-`Dynet2Frame` holds one raw:
+Fletcher-16 checksum (taken mod 256). A `Dynet2Frame` holds one raw:
 
 ```python
 from aiodynet import Dynet2Frame
@@ -83,22 +81,18 @@ frame = Dynet2Frame.from_hex("ac 02 80 da 00 01 b3 00 2a 0a")  # checksum added
 frame.body  # the bytes between the length byte and the checksum
 ```
 
-One kind of frame is understood: the sign-on reply a device sends when it gets
-a DyNet 1 "Do D2 Signon" request (physical opcode 0x40, sub-opcode 0x0A)
-addressed to it. `decode_dynet2(frame)` returns a `Dynet2SignonReply`, which
-gives the device code and box, firmware version and maximum packet sizes, or
-`None` for any other frame.
+Frames are handled like packets everywhere. `PacketFramer.feed` yields both in
+the order they arrived, `DynetClient.subscribe` callbacks get both, and
+`decode` takes either. A frame decodes to a `Dynet2Message`: the one typed so
+far is `Dynet2SignonReply`, and anything else is `UnknownDynet2Message`.
+DyNet 2 messages only come from devices; aiodynet can't send them.
+
+To find out what a device is, ask it to sign on:
 
 ```python
-reply = decode_dynet2(frame)
-if reply is not None:
-    print(f"0x{reply.device_code:02x}/{reply.box} v{reply.firmware_version}")
+reply = await client.query(RequestSignon(device_code=0xB3, box=42))
+print(f"v{reply.firmware_version}, packets up to {reply.max_rx_size} bytes")
 ```
-
-`PacketFramer.feed` and `DynetClient.subscribe` only ever give you DyNet 1
-packets; frames are stepped over whole, so their bytes can't be mistaken for
-packets. To see them, use `PacketFramer.feed_all` or
-`DynetClient.subscribe_dynet2`. aiodynet can't send DyNet 2.
 
 ### Messages
 
@@ -127,6 +121,7 @@ in the DyNet tools and on keypads.
 | `SetUserPreference`, `RequestUserPreference`, `UserPreferenceReport` | 0x48–0x4A | Device-specific 16-bit preference values |
 | `RequestPresetLevel`, `PresetLevelReport` | 0x91, 0x92 | The level a channel has stored for a preset |
 | `ClockTime`, `ClockDate` | physical 0x50, 0x53 | A device setting or broadcasting the time and date |
+| `RequestSignon` | physical 0x40, sub-opcode 0x0A | Ask a device to sign on. It answers with a DyNet 2 `Dynet2SignonReply` |
 | `UnknownMessage` | anything else | Passed through unchanged, packet included |
 
 Where an opcode can address one channel or the whole area, `channel=None`
@@ -181,11 +176,10 @@ or `async with DynetClient(host, port) as client:`.
   client reconnects on its own after any drop, waiting 1 s at first and up to
   60 s between attempts, until you call `close`.
 - **Receiving.** `subscribe(callback)` calls `callback(received)` in the event
-  loop for every packet, where `received.packet` is the raw packet and
-  `received.message` its decoded meaning. It returns an unsubscribe function.
-  A callback that raises is logged and doesn't affect the others.
-- **DyNet 2.** `subscribe_dynet2(callback)` calls `callback(frame)` with each
-  raw `Dynet2Frame`. Packet subscribers never see them.
+  loop for every packet and DyNet 2 frame, where `received.raw` is the
+  `Packet` or `Dynet2Frame` as received and `received.message` its decoded
+  meaning. It returns an unsubscribe function. A callback that raises is
+  logged and doesn't affect the others.
 - **Connection changes.** `subscribe_connection(callback)` reports drops
   (`False`) and reconnects (`True`). `client.connected` gives the current
   state.
@@ -195,8 +189,9 @@ or `async with DynetClient(host, port) as client:`.
   before the packet is written, `send` raises `NotConnectedError`. Nothing is
   kept to send later, so a command can't fire long after it was asked for.
 - **Queries.** `await query(RequestPreset(area=12))` sends the request and
-  returns the matching `PresetReport` (or `ChannelLevelReport` for a
-  `RequestChannelLevel`), or raises `TimeoutError`.
+  returns the matching `PresetReport`, or raises `TimeoutError`. Likewise a
+  `RequestChannelLevel` returns a `ChannelLevelReport`, and a `RequestSignon`
+  to one device returns its `Dynet2SignonReply`.
 - **Closing.** `close` cancels everything the client started and closes the
   socket. No callbacks run after it begins.
 - **Dead gateways.** TCP keepalive is enabled (30 s idle, then 3 probes 10 s

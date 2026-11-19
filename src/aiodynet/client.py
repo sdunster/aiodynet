@@ -7,21 +7,25 @@ import contextlib
 import logging
 import socket
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Self, overload
+from typing import TYPE_CHECKING, Final, Self, cast, overload
 
-from .dynet2 import Dynet2Frame
 from .errors import DynetConnectionError, NotConnectedError
 from .framing import PacketFramer
 from .messages import (
     AnyMessage,
     ChannelLevelReport,
+    Dynet2SignonReply,
     Message,
     PresetReport,
     RequestChannelLevel,
     RequestPreset,
+    RequestSignon,
     decode,
 )
 from .packet import Packet
+
+if TYPE_CHECKING:
+    from .dynet2 import Dynet2Frame
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,18 +46,18 @@ _READ_SIZE: Final = 1024
 
 @dataclass(frozen=True, slots=True)
 class Received:
-    """A packet read from the bus, with its decoded meaning."""
+    """A packet or DyNet 2 frame read from the bus, with its decoded meaning."""
 
-    packet: Packet
-    """The packet exactly as received."""
+    raw: Packet | Dynet2Frame
+    """The packet or frame exactly as received."""
 
     message: AnyMessage
-    """What it means. `UnknownMessage` for anything without a typed message."""
+    """What it means. `UnknownMessage` or `UnknownDynet2Message` for anything
+    without a typed message."""
 
 
 type PacketCallback = Callable[[Received], None]
 type ConnectionCallback = Callable[[bool], None]
-type Dynet2Callback = Callable[[Dynet2Frame], None]
 
 
 async def check_connection(
@@ -157,7 +161,6 @@ class DynetClient:
 
         self._packet_callbacks: list[PacketCallback] = []
         self._connection_callbacks: list[ConnectionCallback] = []
-        self._dynet2_callbacks: list[Dynet2Callback] = []
         self._writer: asyncio.StreamWriter | None = None
         self._queue: asyncio.Queue[tuple[bytes, asyncio.Future[None]]] = asyncio.Queue()
         self._run_task: asyncio.Task[None] | None = None
@@ -209,7 +212,6 @@ class DynetClient:
         self._closed = True
         self._packet_callbacks.clear()
         self._connection_callbacks.clear()
-        self._dynet2_callbacks.clear()
         if self._run_task is not None:
             self._run_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -238,21 +240,14 @@ class DynetClient:
         await self.close()
 
     def subscribe(self, callback: PacketCallback) -> Callable[[], None]:
-        """Call `callback` with every packet read from the bus.
+        """Call `callback` with everything read from the bus, in order.
 
-        Returns a function that unsubscribes. Calling it twice is harmless.
+        That is every DyNet 1 packet and every DyNet 2 frame (gateways send
+        frames such as a greeting after each connect and device sign-on
+        replies). Returns a function that unsubscribes. Calling it twice is
+        harmless.
         """
         return self._add(self._packet_callbacks, callback)
-
-    def subscribe_dynet2(self, callback: Dynet2Callback) -> Callable[[], None]:
-        """Call `callback` with every DyNet 2 frame read from the bus, raw.
-
-        Gateways send these alongside DyNet 1 packets, for example a greeting
-        after each connect and device sign-on replies. They aren't decoded,
-        and `subscribe` callbacks never see them. Returns a function that
-        unsubscribes.
-        """
-        return self._add(self._dynet2_callbacks, callback)
 
     def subscribe_connection(self, callback: ConnectionCallback) -> Callable[[], None]:
         """Call `callback(True)` on reconnecting and `callback(False)` on a drop.
@@ -285,33 +280,45 @@ class DynetClient:
     async def query(
         self, request: RequestChannelLevel, *, timeout: float = ...
     ) -> ChannelLevelReport: ...
+    @overload
     async def query(
-        self, request: RequestPreset | RequestChannelLevel, *, timeout: float = 2.0
-    ) -> PresetReport | ChannelLevelReport:
-        """Send a request and wait for the matching report.
+        self, request: RequestSignon, *, timeout: float = ...
+    ) -> Dynet2SignonReply: ...
+    async def query(
+        self,
+        request: RequestPreset | RequestChannelLevel | RequestSignon,
+        *,
+        timeout: float = 2.0,
+    ) -> PresetReport | ChannelLevelReport | Dynet2SignonReply:
+        """Send a request and wait for the matching reply.
 
-        A `RequestPreset` waits for a `PresetReport` from the same area; a
-        `RequestChannelLevel` waits for a `ChannelLevelReport` from the same
-        area and channel. Raises `TimeoutError` if none arrives in `timeout`
-        seconds (a request can go unanswered when no device owns the area).
-        Every subscriber sees the report as usual.
+        - `RequestPreset` waits for a `PresetReport` from the same area.
+        - `RequestChannelLevel` waits for a `ChannelLevelReport` from the same
+          area and channel.
+        - `RequestSignon` waits for a `Dynet2SignonReply` from the same device
+          code and box. It must name one device: a request to all devices
+          has many answers, so `subscribe` and `send` it instead.
+
+        Raises `TimeoutError` if no reply arrives in `timeout` seconds (a
+        request can go unanswered when no device owns the area). Every
+        subscriber sees the reply as usual.
         """
+        if isinstance(request, RequestSignon) and request.to_all_devices:
+            msg = "query() needs one device; subscribe and send() to ask them all"
+            raise ValueError(msg)
         loop = asyncio.get_running_loop()
-        result: asyncio.Future[PresetReport | ChannelLevelReport] = loop.create_future()
+        result: asyncio.Future[PresetReport | ChannelLevelReport | Dynet2SignonReply]
+        result = loop.create_future()
 
         def match(received: Received) -> None:
             message = received.message
-            if result.done():
-                return
-            if isinstance(request, RequestPreset):
-                if isinstance(message, PresetReport) and message.area == request.area:
-                    result.set_result(message)
-            elif (
-                isinstance(message, ChannelLevelReport)
-                and message.area == request.area
-                and message.channel == request.channel
-            ):
-                result.set_result(message)
+            if not result.done() and _answers(request, message):
+                # _answers only accepts the three reply types.
+                result.set_result(
+                    cast(
+                        "PresetReport | ChannelLevelReport | Dynet2SignonReply", message
+                    )
+                )
 
         unsubscribe = self.subscribe(match)
         try:
@@ -376,11 +383,8 @@ class DynetClient:
             if not data:
                 _LOGGER.warning("Gateway %s closed the connection", self.host)
                 return
-            for item in framer.feed_all(data):
-                if isinstance(item, Packet):
-                    self._dispatch(item)
-                else:
-                    self._dispatch_dynet2(item)
+            for item in framer.feed(data):
+                self._dispatch(item)
 
     async def _write_loop(self, writer: asyncio.StreamWriter) -> None:
         while True:
@@ -408,22 +412,14 @@ class DynetClient:
                 _LOGGER.debug("Reconnect failed, retrying in %s s: %s", delay, err)
                 delay = min(delay * 2, self._max_reconnect_delay)
 
-    def _dispatch(self, packet: Packet) -> None:
-        received = Received(packet=packet, message=decode(packet))
-        _LOGGER.debug("Received %s: %s", packet.hex(), received.message)
+    def _dispatch(self, raw: Packet | Dynet2Frame) -> None:
+        received = Received(raw=raw, message=decode(raw))
+        _LOGGER.debug("Received %s: %s", raw.hex(), received.message)
         for callback in tuple(self._packet_callbacks):
             try:
                 callback(received)
             except Exception:
                 _LOGGER.exception("Error in packet callback %r", callback)
-
-    def _dispatch_dynet2(self, frame: Dynet2Frame) -> None:
-        _LOGGER.debug("Received DyNet 2 frame (%d bytes) %s", len(frame), frame.hex())
-        for callback in tuple(self._dynet2_callbacks):
-            try:
-                callback(frame)
-            except Exception:
-                _LOGGER.exception("Error in DyNet 2 callback %r", callback)
 
     def _notify_connection(self, *, connected: bool) -> None:
         for callback in tuple(self._connection_callbacks):
@@ -439,3 +435,20 @@ class DynetClient:
                 future.set_exception(
                     NotConnectedError("Connection lost before sending")
                 )
+
+
+def _answers(
+    request: RequestPreset | RequestChannelLevel | RequestSignon, message: AnyMessage
+) -> bool:
+    """Whether `message` is the reply `query` waits for after `request`."""
+    match request, message:
+        case RequestPreset(), PresetReport():
+            return message.area == request.area
+        case RequestChannelLevel(), ChannelLevelReport():
+            return (message.area, message.channel) == (request.area, request.channel)
+        case RequestSignon(), Dynet2SignonReply():
+            return (message.device_code, message.box) == (
+                request.device_code,
+                request.box,
+            )
+    return False

@@ -65,10 +65,15 @@ def test_a_sync_byte_near_the_end_waits_for_the_rest() -> None:
 
 
 def test_reset_drops_a_partial_packet() -> None:
-    framer = PacketFramer()
+    runs: list[bytes] = []
+    framer = PacketFramer(on_discard=runs.append)
     list(framer.feed(bytes(A)[:5]))
     framer.reset()
     assert framer.pending == 0
+    assert framer.discarded == 5
+    assert runs == [bytes(A)[:5]]
+    framer.reset()  # nothing left to drop
+    assert runs == [bytes(A)[:5]]
     assert list(framer.feed(bytes(B))) == [B]
 
 

@@ -136,8 +136,14 @@ class PacketFramer:
         return end if valid else _NO_MATCH
 
     def reset(self) -> None:
-        """Drop any partial packet or frame, for example after reconnecting."""
-        self._buffer.clear()
+        """Drop any partial packet or frame, for example after reconnecting.
+
+        The dropped bytes count as skipped: they are added to `discarded` and
+        passed to `on_discard`, so nothing leaves the framer unseen.
+        """
+        if self._buffer:
+            self._log_skipped(self._buffer)
+            self._buffer.clear()
 
     @property
     def pending(self) -> int:

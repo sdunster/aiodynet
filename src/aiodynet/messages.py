@@ -73,6 +73,7 @@ __all__ = [
     "PresetLevelReport",
     "PresetReport",
     "PresetSelect",
+    "ProgramLevelsToPreset",
     "RequestChannelLevel",
     "RequestPreset",
     "RequestPresetLevel",
@@ -104,6 +105,7 @@ class Opcode(IntEnum):
     DECREMENT_AREA_LEVEL = 0x05
     INCREMENT_AREA_LEVEL = 0x06
     PROGRAM_CURRENT_PRESET = 0x08
+    PROGRAM_LEVELS_TO_PRESET = 0x09
     PRESET_5 = 0x0A
     PRESET_6 = 0x0B
     PRESET_7 = 0x0C
@@ -1259,6 +1261,37 @@ class ResumeOccupancyDetection(_OccupancyDetectionMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ProgramLevelsToPreset(LogicalMessage):
+    """Store an area's current channel levels as a preset (opcode 0x09).
+
+    This overwrites the preset stored in the devices. Unlike
+    ``AreaCommand(command=PROGRAM_CURRENT_PRESET)`` (0x08), it names the
+    preset. Byte 2 is the preset counted from 0, as in `PresetReport`; bytes
+    4-5 are unused.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.PROGRAM_LEVELS_TO_PRESET,)
+
+    preset: int
+    """The preset to store, 1-256."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int("preset", self.preset, 1, 256)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(self.preset - 1, Opcode.PROGRAM_LEVELS_TO_PRESET, 0, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, preset, _, _, _, join = packet.data
+        return cls(area=area, preset=preset + 1, join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PhysicalMessage(Message):
     """A message addressed to a device (sync byte 0x5C)."""
 
@@ -1609,6 +1642,7 @@ type AnyDynet1Message = (
     | UserPreferenceReport
     | RequestPresetLevel
     | PresetLevelReport
+    | ProgramLevelsToPreset
     | SuspendOccupancyDetection
     | ResumeOccupancyDetection
     | HoldTimerAllPresets
@@ -1659,6 +1693,7 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     HoldTimerAllPresets,
     SuspendOccupancyDetection,
     ResumeOccupancyDetection,
+    ProgramLevelsToPreset,
 )
 
 _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (

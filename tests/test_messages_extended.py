@@ -33,6 +33,7 @@ from aiodynet import (
     Panic,
     PresetLevelReport,
     PresetSelect,
+    ProgramLevelsToPreset,
     RequestPresetLevel,
     RequestUserPreference,
     ResetPreset,
@@ -130,6 +131,7 @@ ENCODINGS: list[tuple[Message, str]] = [
     (HoldTimerAllPresets(area=5, state_raw=1), "1c05ff300001ff"),
     (SuspendOccupancyDetection(area=5), "1c05ff3a0000ff"),
     (ResumeOccupancyDetection(area=5, channel=1), "1c05003b0000ff"),
+    (ProgramLevelsToPreset(area=5, preset=3), "1c0502090000ff"),
 ]
 
 
@@ -365,6 +367,9 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
     *(
         st.builds(cls, area=areas, channel=channel_or_all, join=joins)
         for cls in (SuspendOccupancyDetection, ResumeOccupancyDetection)
+    ),
+    st.builds(
+        ProgramLevelsToPreset, area=areas, preset=st.integers(1, 256), join=joins
     ),
 )
 

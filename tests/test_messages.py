@@ -24,6 +24,8 @@ from aiodynet import (
     ClockDate,
     ClockTime,
     Dynet2Frame,
+    Dynet2RequestSerialNumber,
+    Dynet2SerialNumberReply,
     Dynet2SignonReply,
     FadeChannelToPreset,
     Level,
@@ -307,8 +309,12 @@ def describe(message: AnyMessage) -> str:  # noqa: C901, PLR0911
             return "other physical"
         case LogicalMessage():
             return "other logical"
-        case Dynet2SignonReply():
-            return "sign-on reply"
+        case (
+            Dynet2SignonReply()
+            | Dynet2RequestSerialNumber()
+            | Dynet2SerialNumberReply()
+        ):
+            return "dynet 2"
         case UnknownMessage() | UnknownDynet2Message():
             return "unknown"
         case _:
@@ -324,7 +330,7 @@ def test_exhaustive_match() -> None:
     signon = Dynet2Frame.from_hex(
         "ac 04 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 3f b4"
     )
-    assert describe(decode(signon)) == "sign-on reply"
+    assert describe(decode(signon)) == "dynet 2"
     assert describe(decode(Dynet2Frame.build(b""))) == "unknown"
 
 

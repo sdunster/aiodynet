@@ -83,9 +83,16 @@ frame.body  # the bytes between the length byte and the checksum
 
 Frames are handled like packets everywhere. `PacketFramer.feed` yields both in
 the order they arrived, `DynetClient.subscribe` callbacks get both, and
-`decode` takes either. A frame decodes to a `Dynet2Message`: the one typed so
-far is `Dynet2SignonReply`, and anything else is `UnknownDynet2Message`.
-DyNet 2 messages only come from devices; aiodynet can't send them.
+`decode` takes either. A frame decodes to a `Dynet2Message`:
+
+| Message | Frame | Meaning |
+|---|---|---|
+| `Dynet2SignonReply` | reply (0x81), type 0x01 | A device's address, firmware version and maximum packet sizes, in answer to `RequestSignon` |
+| `Dynet2RequestSerialNumber` | request (0x80), type 0x0A | Ask a device for its serial number. System Builder sends these |
+| `Dynet2SerialNumberReply` | reply (0x81), type 0x0A | A device's serial number |
+| `UnknownDynet2Message` | anything else | Passed through unchanged, frame included |
+
+aiodynet decodes DyNet 2 messages but can't send them.
 
 To find out what a device is, ask it to sign on:
 
@@ -254,6 +261,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset` | Opcode list only |
 | `RequestFirmwareVersion` | Opcode list, plus requests sent to 45 devices at one site. Each answered with a `DeviceIdentify` from its own address, with the version the site's System Builder job records |
 | `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device |
+| `Dynet2RequestSerialNumber`, `Dynet2SerialNumberReply` | Requests from System Builder and the replies to them, captured at one site. The serial numbers in 44 replies were checked against that site's System Builder job: 42 matched, and the other two devices had been replaced since the job was last updated. Byte 10 of the reply and its three trailing zero bytes are kept raw |
 | DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 
 The `dynalite-devices` comparison was made black-box: by driving its public

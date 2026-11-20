@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `Dynet2RequestSerialNumber` and `Dynet2SerialNumberReply` type the DyNet 2
+  serial number request and reply (type 0x0A), which `decode` used to return
+  as `UnknownDynet2Message`. Code that matches exhaustively on
+  `AnyDynet2Message` needs a case for them.
 - Documented that a `DeviceIdentify` answers `RequestFirmwareVersion`
   (checked on hardware).
 

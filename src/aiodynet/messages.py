@@ -2,8 +2,7 @@
 
 A message says what a packet *means*; a `Packet` is what goes on the wire.
 DyNet 2 frames work the same way: `decode` turns a `Dynet2Frame` into a
-`Dynet2Message`. DyNet 2 messages only come from devices; aiodynet can't send
-them.
+`Dynet2Message`. aiodynet decodes DyNet 2 messages but can't send them.
 Every message class handles exactly one wire form. Bytes the protocol marks
 as unused are dropped when decoding and sent as zero, so ``decode(p).to_packet()
 == p`` whenever those bytes were zero. The original `Packet` is always passed
@@ -1616,9 +1615,13 @@ class UnknownMessage(Message):
 
 # DyNet 2
 
+_REQUEST_CLASS = 0x80
 _REPLY_CLASS = 0x81
 _SIGNON_TYPE = 0x01
 _SIGNON_REPLY_LENGTH = 20
+_SERIAL_TYPE = 0x0A
+_SERIAL_REQUEST_LENGTH = 12
+_SERIAL_REPLY_LENGTH = 20
 
 
 def _check_packet_size(name: str, value: object) -> None:
@@ -1632,8 +1635,8 @@ def _check_packet_size(name: str, value: object) -> None:
 class Dynet2Message(ABC):
     """Base class for messages carried in DyNet 2 frames.
 
-    These only come from devices. aiodynet can't send DyNet 2, so they aren't
-    `Message`s and `DynetClient.send` doesn't take them.
+    aiodynet decodes these but can't send DyNet 2, so they aren't `Message`s
+    and `DynetClient.send` doesn't take them.
     """
 
     @abstractmethod
@@ -1760,6 +1763,150 @@ class Dynet2SignonReply(Dynet2Message):
         return Dynet2Frame.build(body)
 
 
+def _check_raw(name: str, value: object, length: int) -> None:
+    if not isinstance(value, bytes):
+        msg = f"{name} must be bytes, not {type(value).__name__}"
+        raise TypeError(msg)
+    if len(value) != length:
+        msg = f"{name} must be {length} bytes, got {len(value)}"
+        raise ValueError(msg)
+
+
+def _check_addresses(message: object, *prefixes: str) -> None:
+    for prefix in prefixes:
+        _check_int(
+            f"{prefix}device_code", getattr(message, f"{prefix}device_code"), 0, 0xFF
+        )
+        _check_int(f"{prefix}box", getattr(message, f"{prefix}box"), 0, 0xFFFF)
+
+
+def _address(device_code: int, box: int) -> bytes:
+    return bytes((device_code,)) + box.to_bytes(2)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2RequestSerialNumber(Dynet2Message):
+    """Ask a device for its serial number (DyNet 2 request type 0x0A).
+
+    Layout::
+
+        ac 02 | 80 | source: dev box box | target: dev box box | 0a | C2 C1
+
+    Byte 2 = 0x80 is a request. The device answers with a
+    `Dynet2SerialNumberReply`. System Builder (device 0xDA box 1) sends one to
+    each device it sees sign on or identify itself. aiodynet decodes these
+    but can't send them.
+    """
+
+    device_code: int
+    """The device being asked."""
+    box: int
+    source_device_code: int
+    """Who is asking."""
+    source_box: int
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "source_")
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a serial number request. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _SERIAL_REQUEST_LENGTH
+            and body[0] == _REQUEST_CLASS
+            and body[7] == _SERIAL_TYPE
+        ):
+            msg = f"Not a DyNet 2 serial number request: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            source_device_code=body[1],
+            source_box=int.from_bytes(body[2:4]),
+            device_code=body[4],
+            box=int.from_bytes(body[5:7]),
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            bytes((_REQUEST_CLASS,))
+            + _address(self.source_device_code, self.source_box)
+            + _address(self.device_code, self.box)
+            + bytes((_SERIAL_TYPE,))
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2SerialNumberReply(Dynet2Message):
+    """A device's serial number, the answer to `Dynet2RequestSerialNumber`.
+
+    Layout::
+
+        ac 04 | 81 | source: dev box box | target: dev box box | 0a | rr
+              | serial: 4 bytes, big-endian | pp pp pp | C2 C1
+
+    The serials in two replies matched the ones System Builder holds for
+    those devices, and 42 of 44 more matched too (the other two devices had
+    been replaced since that record was made). Byte 10 (``rr``) was 0x0A in
+    every reply seen, and bytes 15-17 (``pp``) were zero. They are kept raw;
+    the zeros look like padding to a multiple of four bytes.
+    """
+
+    device_code: int
+    """The device the serial number belongs to."""
+    box: int
+    target_device_code: int
+    """Who the reply is addressed to: the device that asked."""
+    target_box: int
+    serial_number: int
+    """The serial number, as System Builder shows it."""
+    reserved_raw: bytes = b"\x0a"
+    """Byte 10, meaning unknown."""
+    padding_raw: bytes = b"\x00\x00\x00"
+    """Bytes 15-17."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "target_")
+        _check_int("serial_number", self.serial_number, 0, 0xFFFFFFFF)
+        _check_raw("reserved_raw", self.reserved_raw, 1)
+        _check_raw("padding_raw", self.padding_raw, 3)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a serial number reply. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _SERIAL_REPLY_LENGTH
+            and body[0] == _REPLY_CLASS
+            and body[7] == _SERIAL_TYPE
+        ):
+            msg = f"Not a DyNet 2 serial number reply: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            reserved_raw=body[8:9],
+            serial_number=int.from_bytes(body[9:13]),
+            padding_raw=body[13:16],
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            bytes((_REPLY_CLASS,))
+            + _address(self.device_code, self.box)
+            + _address(self.target_device_code, self.target_box)
+            + bytes((_SERIAL_TYPE,))
+            + self.reserved_raw
+            + self.serial_number.to_bytes(4)
+            + self.padding_raw
+        )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownDynet2Message(Dynet2Message):
     """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
@@ -1816,7 +1963,12 @@ type AnyDynet1Message = (
 )
 """Every message `decode` can return for a `Packet`."""
 
-type AnyDynet2Message = Dynet2SignonReply | UnknownDynet2Message
+type AnyDynet2Message = (
+    Dynet2SignonReply
+    | Dynet2RequestSerialNumber
+    | Dynet2SerialNumberReply
+    | UnknownDynet2Message
+)
 """Every message `decode` can return for a `Dynet2Frame`."""
 
 type AnyMessage = AnyDynet1Message | AnyDynet2Message
@@ -1866,6 +2018,11 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     RequestFirmwareVersion,
 )
 
+_DYNET2_TYPES: tuple[
+    type[Dynet2SignonReply | Dynet2RequestSerialNumber | Dynet2SerialNumberReply],
+    ...,
+] = (Dynet2SignonReply, Dynet2RequestSerialNumber, Dynet2SerialNumberReply)
+
 _Decoder = Callable[[Packet], "AnyDynet1Message"]
 _DECODERS: dict[tuple[int, int], _Decoder] = {}
 for _type in _LOGICAL_TYPES:
@@ -1891,10 +2048,12 @@ def decode(raw: Packet | Dynet2Frame) -> AnyMessage:
     typed message comes back as `UnknownMessage` or `UnknownDynet2Message`.
     """
     if isinstance(raw, Dynet2Frame):
-        try:
-            return Dynet2SignonReply.from_frame(raw)
-        except ValueError:
-            return UnknownDynet2Message(frame=raw)
+        for dynet2_type in _DYNET2_TYPES:
+            try:
+                return dynet2_type.from_frame(raw)
+            except ValueError:
+                pass
+        return UnknownDynet2Message(frame=raw)
     packet = raw
     decoder = _DECODERS.get((packet.sync, packet.data[3]))
     if decoder is not None:

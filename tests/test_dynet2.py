@@ -3,6 +3,8 @@ import pytest
 from aiodynet import (
     DYNET2_ALL_DEVICES,
     Dynet2Frame,
+    Dynet2RequestSerialNumber,
+    Dynet2SerialNumberReply,
     Dynet2SignonReply,
     InvalidPacketError,
     Packet,
@@ -131,14 +133,32 @@ def test_signon_reply_from_the_network_monitor() -> None:
     assert D5SEN.to_frame() == frame
 
 
-@pytest.mark.parametrize("text", [GREETING, REQUEST, REPLY])
-def test_other_frames_decode_as_unknown(text: str) -> None:
-    frame = Dynet2Frame.from_hex(text)
+def test_greeting_decodes_as_unknown() -> None:
+    frame = Dynet2Frame.from_hex(GREETING)
     message = decode(frame)
     assert message == UnknownDynet2Message(frame=frame)
     assert message.to_frame() == frame
-    with pytest.raises(ValueError, match="Not a DyNet 2 sign-on reply"):
-        Dynet2SignonReply.from_frame(frame)
+
+
+@pytest.mark.parametrize(
+    ("cls", "name"),
+    [
+        (Dynet2SignonReply, "sign-on reply"),
+        (Dynet2RequestSerialNumber, "serial number request"),
+        (Dynet2SerialNumberReply, "serial number reply"),
+    ],
+)
+@pytest.mark.parametrize("text", [GREETING, REQUEST, REPLY, SIGNON])
+def test_each_type_rejects_other_frames(
+    cls: type[Dynet2SignonReply | Dynet2RequestSerialNumber | Dynet2SerialNumberReply],
+    name: str,
+    text: str,
+) -> None:
+    frame = Dynet2Frame.from_hex(text)
+    if isinstance(decode(frame), cls):
+        return
+    with pytest.raises(ValueError, match=f"Not a DyNet 2 {name}"):
+        cls.from_frame(frame)
 
 
 def test_signon_reply_round_trip_with_every_field_set() -> None:
@@ -203,3 +223,113 @@ def test_request_signon_packet() -> None:
 def test_other_device_status_requests_are_unknown() -> None:
     packet = Packet.from_hex("5c b3 2a 40 00 00 04")  # sub-opcode 0x04, PCB link
     assert decode(packet) == UnknownMessage(packet=packet)
+
+
+# Serial numbers. REQUEST and REPLY above are a real request (from System
+# Builder, 0xDA box 1) and its answer. The serial numbers in the frames below
+# are made up.
+
+
+def test_captured_serial_number_request() -> None:
+    request = decode(Dynet2Frame.from_hex(REQUEST))
+    assert request == Dynet2RequestSerialNumber(
+        device_code=0xB3, box=42, source_device_code=0xDA, source_box=1
+    )
+    assert request.to_frame().hex() == REQUEST
+
+
+def test_captured_serial_number_reply_round_trips() -> None:
+    reply = decode(Dynet2Frame.from_hex(REPLY))
+    assert isinstance(reply, Dynet2SerialNumberReply)
+    assert (reply.device_code, reply.box) == (0xB3, 42)
+    assert (reply.target_device_code, reply.target_box) == (0xDA, 1)
+    assert reply.to_frame().hex() == REPLY
+
+
+def test_serial_number_reply() -> None:
+    frame = Dynet2Frame.from_hex(
+        "ac 04 81 fd 00 03 da 00 01 0a 0a 00 bc 61 4e 00 00 00"
+    )
+    reply = decode(frame)
+    assert reply == Dynet2SerialNumberReply(
+        device_code=0xFD,
+        box=3,
+        target_device_code=0xDA,
+        target_box=1,
+        serial_number=12345678,
+    )
+    assert reply.to_frame() == frame
+
+
+def test_serial_number_reply_round_trip_with_every_field_set() -> None:
+    reply = Dynet2SerialNumberReply(
+        device_code=0x01,
+        box=0xFFFF,
+        target_device_code=0xFF,
+        target_box=0x1234,
+        serial_number=0xFFFFFFFF,
+        reserved_raw=b"\x7f",
+        padding_raw=b"\x01\x02\x03",
+    )
+    assert decode(reply.to_frame()) == reply
+
+
+@pytest.mark.parametrize(
+    ("change", "error", "kind"),
+    [
+        ({"device_code": 256}, "device_code must be 0-255", ValueError),
+        ({"target_box": 65536}, "target_box must be 0-65535", ValueError),
+        ({"serial_number": 1 << 32}, "serial_number must be 0-4294967295", ValueError),
+        ({"serial_number": -1}, "serial_number must be 0-4294967295", ValueError),
+        ({"reserved_raw": b""}, "reserved_raw must be 1 bytes", ValueError),
+        ({"padding_raw": b"\x00"}, "padding_raw must be 3 bytes", ValueError),
+        ({"padding_raw": "000000"}, "padding_raw must be bytes", TypeError),
+    ],
+)
+def test_serial_number_reply_validation(
+    change: dict[str, object], error: str, kind: type[Exception]
+) -> None:
+    fields: dict[str, object] = {
+        "device_code": 0xFD,
+        "box": 3,
+        "target_device_code": 0xDA,
+        "target_box": 1,
+        "serial_number": 1,
+    } | change
+    with pytest.raises(kind, match=error):
+        Dynet2SerialNumberReply(**fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"box": 65536}, "box must be 0-65535"),
+        ({"source_device_code": -1}, "source_device_code must be 0-255"),
+        ({"source_box": 70000}, "source_box must be 0-65535"),
+    ],
+)
+def test_serial_number_request_validation(
+    change: dict[str, object], error: str
+) -> None:
+    fields: dict[str, object] = {
+        "device_code": 0xFD,
+        "box": 3,
+        "source_device_code": 0xDA,
+        "source_box": 1,
+    } | change
+    with pytest.raises(ValueError, match=error):
+        Dynet2RequestSerialNumber(**fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Right type byte, wrong class or length.
+        "ac 02 81 da 00 01 fd 00 03 0a",
+        "ac 04 80 fd 00 03 da 00 01 0a 0a 00 bc 61 4e 00 00 00",
+        "ac 04 81 fd 00 03 da 00 01 0b 0a 00 bc 61 4e 00 00 00",
+    ],
+)
+def test_near_misses_decode_as_unknown(text: str) -> None:
+    frame = Dynet2Frame.from_hex(text)
+    assert decode(frame) == UnknownDynet2Message(frame=frame)

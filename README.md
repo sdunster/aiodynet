@@ -128,7 +128,7 @@ in the DyNet tools and on keypads.
 | `DeviceIdentify` | physical 0x00 | A device saying what it is, with its firmware version |
 | `DeviceStatusReport` | physical 0x41 | A device status report; the data bytes are kept raw |
 | `ClockTime`, `ClockDate` | physical 0x50, 0x53 | A device setting or broadcasting the time and date |
-| `RequestFirmwareVersion` | physical 0x80 | Ask a device for its firmware version |
+| `RequestFirmwareVersion` | physical 0x80 | Ask a device for its firmware version. It answers with a `DeviceIdentify` |
 | `RequestSignon` | physical 0x40, sub-opcode 0x0A | Ask a device to sign on. It answers with a DyNet 2 `Dynet2SignonReply` |
 | `UnknownMessage` | anything else | Passed through unchanged, packet included |
 
@@ -251,7 +251,8 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `MotionActivitySync`, `UserPreferenceReport`, `ClockTime`, `ClockDate` | Opcode list, plus packets captured on a real site (`tests/fixtures/site-capture.jsonl`). The clock bytes are BCD, and the date packs the day of the week into the top three bits of the month byte; both inferred from that capture |
 | All other extended messages | Byte layout from the opcode list only |
 | `AreaCascadingSync`, `OccupancyDetectionAllPresets` (0x01 = resume), `DeviceIdentify` (version as hex digits), `DeviceStatusReport`, `UserPreferenceReport.temperature` (whole degrees + hundredths) | Opcode list, plus real packets decoded by the official DyNet network monitor. Negative temperatures haven't been seen, so they come back as `None` |
-| `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset`, `RequestFirmwareVersion` | Opcode list only |
+| `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset` | Opcode list only |
+| `RequestFirmwareVersion` | Opcode list, plus requests sent to 45 devices at one site. Each answered with a `DeviceIdentify` from its own address, with the version the site's System Builder job records |
 | `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device |
 | DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 

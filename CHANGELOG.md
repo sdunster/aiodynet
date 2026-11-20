@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Documented that a `DeviceIdentify` answers `RequestFirmwareVersion`
+  (checked on hardware).
+
 ## 0.2.0 (2026-11-19)
 
 DyNet 2 frames (sync byte 0xAC) are read alongside DyNet 1 packets.

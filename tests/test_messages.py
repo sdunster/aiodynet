@@ -101,6 +101,7 @@ LEGACY_INBOUND: list[tuple[str, AnyMessage]] = [
 @pytest.mark.parametrize(("expected", "message"), LEGACY_OUTBOUND)
 def test_legacy_outbound_bytes(expected: str, message: Message) -> None:
     assert bytes(message.to_packet()).hex() == expected
+    assert decode(Packet.from_hex(expected)) == message
 
 
 @pytest.mark.parametrize(("raw", "expected"), LEGACY_INBOUND)

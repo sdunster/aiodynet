@@ -6,6 +6,10 @@
   serial number request and reply (type 0x0A), which `decode` used to return
   as `UnknownDynet2Message`. Code that matches exhaustively on
   `AnyDynet2Message` needs a case for them.
+- `Dynet2SignonReply` also decodes the 44-byte sign-on, which adds an IPv6
+  address (`ipv6_address`, with the extra bytes in `extension_raw`). This
+  frame used to decode as `UnknownDynet2Message`. Its source is the
+  all-devices address, so `DynetClient.query` can't match it to a request.
 - Documented that a `DeviceIdentify` answers `RequestFirmwareVersion`
   (checked on hardware).
 

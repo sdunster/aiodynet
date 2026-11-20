@@ -87,7 +87,7 @@ the order they arrived, `DynetClient.subscribe` callbacks get both, and
 
 | Message | Frame | Meaning |
 |---|---|---|
-| `Dynet2SignonReply` | reply (0x81), type 0x01 | A device's address, firmware version and maximum packet sizes, in answer to `RequestSignon` |
+| `Dynet2SignonReply` | reply (0x81), type 0x01 | A device's address, firmware version and maximum packet sizes, in answer to `RequestSignon`. A 44-byte form also carries an IPv6 address |
 | `Dynet2RequestSerialNumber` | request (0x80), type 0x0A | Ask a device for its serial number. System Builder sends these |
 | `Dynet2SerialNumberReply` | reply (0x81), type 0x0A | A device's serial number |
 | `UnknownDynet2Message` | anything else | Passed through unchanged, frame included |
@@ -260,7 +260,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `AreaCascadingSync`, `OccupancyDetectionAllPresets` (0x01 = resume), `DeviceIdentify` (version as hex digits), `DeviceStatusReport`, `UserPreferenceReport.temperature` (whole degrees + hundredths) | Opcode list, plus real packets decoded by the official DyNet network monitor. Negative temperatures haven't been seen, so they come back as `None` |
 | `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset` | Opcode list only |
 | `RequestFirmwareVersion` | Opcode list, plus requests sent to 45 devices at one site. Each answered with a `DeviceIdentify` from its own address, with the version the site's System Builder job records |
-| `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device |
+| `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device. The 44-byte form comes from one frame, sent by a DALI controller that is also an Ethernet bridge: its 16 extra address bytes were that device's IPv6 address. Its source was the all-devices address, so `query` can't match it to the request |
 | `Dynet2RequestSerialNumber`, `Dynet2SerialNumberReply` | Requests from System Builder and the replies to them, captured at one site. The serial numbers in 44 replies were checked against that site's System Builder job: 42 matched, and the other two devices had been replaced since the job was last updated. Byte 10 of the reply and its three trailing zero bytes are kept raw |
 | DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 

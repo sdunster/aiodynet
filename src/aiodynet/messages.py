@@ -32,6 +32,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
+from ipaddress import IPv6Address
 from typing import ClassVar, Self, cast, overload, override
 
 from .dynet2 import DYNET2_MAX_LENGTH, DYNET2_MIN_LENGTH, Dynet2Frame
@@ -1619,6 +1620,8 @@ _REQUEST_CLASS = 0x80
 _REPLY_CLASS = 0x81
 _SIGNON_TYPE = 0x01
 _SIGNON_REPLY_LENGTH = 20
+_SIGNON_EXTENSION_LENGTH = 24
+_SIGNON_IPV6 = slice(5, 21)
 _SERIAL_TYPE = 0x0A
 _SERIAL_REQUEST_LENGTH = 12
 _SERIAL_REPLY_LENGTH = 20
@@ -1644,6 +1647,15 @@ class Dynet2Message(ABC):
         """Encode the message as a frame, for example to play a device in tests."""
 
 
+def _check_raw(name: str, value: object, length: int) -> None:
+    if not isinstance(value, bytes):
+        msg = f"{name} must be bytes, not {type(value).__name__}"
+        raise TypeError(msg)
+    if len(value) != length:
+        msg = f"{name} must be {length} bytes, got {len(value)}"
+        raise ValueError(msg)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Dynet2SignonReply(Dynet2Message):
     """A device announcing itself, the DyNet 2 "Reply Device Signon".
@@ -1659,6 +1671,17 @@ class Dynet2SignonReply(Dynet2Message):
     a sign-on, because another 0x81 reply seen on the bus has 0x0A there and
     isn't one. That rule rests on one confirmed frame. Bytes 10-11 (``rr``) are
     unknown and are kept raw.
+
+    A 44-byte form adds 24 bytes before the checksum (`extension_raw`). One
+    device sent it, a DALI controller that is also an Ethernet bridge::
+
+        ... | slave | 03 00 00 00 00 | IPv6 address (16 bytes) | 00 00 00 | C2 C1
+
+    The 16 bytes were that device's IPv6 address (see `ipv6_address`), and
+    the rest of the frame matched its firmware version. Its source address
+    was 0xAA box 0x5555, all devices, not its own, so this reply doesn't say
+    which device sent it and `DynetClient.query` doesn't match it to the
+    request. What the 0x03 means is unknown.
     """
 
     device_code: int
@@ -1681,6 +1704,8 @@ class Dynet2SignonReply(Dynet2Message):
     """The slave device number."""
     reserved_raw: bytes = b"\x00\x00"
     """Bytes 10-11, meaning unknown."""
+    extension_raw: bytes = b""
+    """Bytes 18-41 of the 44-byte form, or empty for the 20-byte form."""
 
     def __post_init__(self) -> None:
         """Check every field fits its byte(s)."""
@@ -1697,13 +1722,16 @@ class Dynet2SignonReply(Dynet2Message):
             _check_int(name, getattr(self, name), 0, 0xFFFF)
         _check_packet_size("max_rx_size", self.max_rx_size)
         _check_packet_size("max_tx_size", self.max_tx_size)
-        reserved: object = self.reserved_raw  # checked at runtime too
-        if not isinstance(reserved, bytes):
-            msg = f"reserved_raw must be bytes, not {type(reserved).__name__}"
-            raise TypeError(msg)
-        if len(reserved) != 2:
-            msg = f"reserved_raw must be 2 bytes, got {len(reserved)}"
-            raise ValueError(msg)
+        _check_raw("reserved_raw", self.reserved_raw, 2)
+        if self.extension_raw != b"":
+            _check_raw("extension_raw", self.extension_raw, _SIGNON_EXTENSION_LENGTH)
+
+    @property
+    def ipv6_address(self) -> IPv6Address | None:
+        """The IPv6 address in the 44-byte form, or `None` in the 20-byte form."""
+        if not self.extension_raw:
+            return None
+        return IPv6Address(self.extension_raw[_SIGNON_IPV6])
 
     @property
     def firmware_version(self) -> str:
@@ -1720,7 +1748,8 @@ class Dynet2SignonReply(Dynet2Message):
         """Read a sign-on reply. Raises `ValueError` if the frame isn't one."""
         body = frame.body
         if not (
-            len(frame) == _SIGNON_REPLY_LENGTH
+            len(frame)
+            in (_SIGNON_REPLY_LENGTH, _SIGNON_REPLY_LENGTH + _SIGNON_EXTENSION_LENGTH)
             and body[0] == _REPLY_CLASS
             and body[7] == _SIGNON_TYPE
         ):
@@ -1738,6 +1767,7 @@ class Dynet2SignonReply(Dynet2Message):
             max_tx_size=(body[13] + 1) * 4,
             port=body[14],
             slave=body[15],
+            extension_raw=body[16:],
         )
 
     @override
@@ -1759,17 +1789,9 @@ class Dynet2SignonReply(Dynet2Message):
                     self.slave,
                 )
             )
+            + self.extension_raw
         )
         return Dynet2Frame.build(body)
-
-
-def _check_raw(name: str, value: object, length: int) -> None:
-    if not isinstance(value, bytes):
-        msg = f"{name} must be bytes, not {type(value).__name__}"
-        raise TypeError(msg)
-    if len(value) != length:
-        msg = f"{name} must be {length} bytes, got {len(value)}"
-        raise ValueError(msg)
 
 
 def _check_addresses(message: object, *prefixes: str) -> None:

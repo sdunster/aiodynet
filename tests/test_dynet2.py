@@ -1,3 +1,5 @@
+from ipaddress import IPv6Address
+
 import pytest
 
 from aiodynet import (
@@ -332,4 +334,60 @@ def test_serial_number_request_validation(
 )
 def test_near_misses_decode_as_unknown(text: str) -> None:
     frame = Dynet2Frame.from_hex(text)
+    assert decode(frame) == UnknownDynet2Message(frame=frame)
+
+
+# The 44-byte sign-on, as one DALI controller (also an Ethernet bridge) sent
+# it, with its IPv6 address swapped for one from the documentation range.
+LONG_SIGNON = (
+    "ac 0a 81 aa 55 55 aa 55 55 01 00 00 01 11 86 86 00 00"
+    " 03 00 00 00 00 20 01 0d b8 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00"
+)
+
+
+def test_long_signon_reply() -> None:
+    frame = Dynet2Frame.from_hex(LONG_SIGNON)
+    reply = decode(frame)
+    assert isinstance(reply, Dynet2SignonReply)
+    assert (reply.device_code, reply.box) == DYNET2_ALL_DEVICES
+    assert reply.to_all_devices
+    assert reply.firmware_version == "01.11"
+    assert (reply.max_rx_size, reply.max_tx_size) == (540, 540)
+    assert reply.ipv6_address == IPv6Address("2001:db8::1")
+    assert reply.extension_raw[:5] == bytes.fromhex("03 00 00 00 00")
+    assert reply.to_frame() == frame
+
+
+def test_short_signon_reply_has_no_ipv6_address() -> None:
+    assert D5SEN.ipv6_address is None
+    assert D5SEN.extension_raw == b""
+
+
+@pytest.mark.parametrize(
+    ("extension", "error", "kind"),
+    [
+        (bytes(23), "extension_raw must be 24 bytes, got 23", ValueError),
+        (bytes(25), "extension_raw must be 24 bytes, got 25", ValueError),
+        ("00" * 24, "extension_raw must be bytes", TypeError),
+    ],
+)
+def test_signon_extension_validation(
+    extension: object, error: str, kind: type[Exception]
+) -> None:
+    with pytest.raises(kind, match=error):
+        Dynet2SignonReply(
+            device_code=0x64,
+            box=42,
+            firmware_major=1,
+            firmware_minor=0x11,
+            max_rx_size=128,
+            max_tx_size=128,
+            extension_raw=extension,  # type: ignore[arg-type]
+        )
+
+
+def test_other_signon_lengths_decode_as_unknown() -> None:
+    frame = Dynet2Frame.from_hex(
+        "ac 06 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 00 00 00 00 00 00 00 00"
+    )
     assert decode(frame) == UnknownDynet2Message(frame=frame)

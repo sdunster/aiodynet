@@ -11,6 +11,7 @@ import pytest
 from aiodynet import (
     ChannelLevelReport,
     Dynet2Frame,
+    Dynet2RequestSerialNumber,
     Dynet2SignonReply,
     DynetClient,
     DynetConnectionError,
@@ -355,6 +356,25 @@ async def test_send_message_and_packet(
     await client.send(Packet.from_hex("1c0100630000ff"))
     assert await gateway.next_packet() == Packet.from_hex("1c0200000000ffe3")
     assert await gateway.next_packet() == Packet.from_hex("1c0100630000ff81")
+
+
+async def test_send_dynet2_frame_and_message(
+    gateway: FakeGateway, make_client: ClientFactory
+) -> None:
+    client = make_client()
+    await client.connect()
+    greeting = Dynet2Frame.from_hex("ac0482dc005aaa5555000c0000000000000043c8")
+    request = Dynet2RequestSerialNumber(
+        device_code=0xB3, box=42, source_device_code=0xDA, source_box=1
+    )
+    await client.send(greeting)
+    await client.send(request)
+    # Paced with packets: this one follows the two frames.
+    await client.send(PresetSelect(area=2, preset=1))
+    assert await gateway.next_packet() == Packet.from_hex("1c0200000000ffe3")
+    assert bytes(gateway.raw_received) == (
+        bytes(greeting) + bytes(request.to_frame()) + bytes.fromhex("1c0200000000ffe3")
+    )
 
 
 async def test_send_when_not_connected() -> None:

@@ -158,7 +158,7 @@ class FakeGateway:
                 self.raw_received += data
                 for packet in framer.feed(data):
                     if not isinstance(packet, Packet):
-                        continue  # a gateway takes only DyNet 1 from clients
+                        continue  # DyNet 2 frames are only in raw_received
                     self.received.append(packet)
                     self._queue.put_nowait(packet)
                     if self._replies is not None:

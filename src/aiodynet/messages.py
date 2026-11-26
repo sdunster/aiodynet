@@ -2,7 +2,7 @@
 
 A message says what a packet *means*; a `Packet` is what goes on the wire.
 DyNet 2 frames work the same way: `decode` turns a `Dynet2Frame` into a
-`Dynet2Message`. aiodynet decodes DyNet 2 messages but can't send them.
+`Dynet2Message`, and `DynetClient.send` sends one with its `to_frame`.
 Every message class handles exactly one wire form. Bytes the protocol marks
 as unused are dropped when decoding and sent as zero, so ``decode(p).to_packet()
 == p`` whenever those bytes were zero. The original `Packet` is always passed
@@ -1638,13 +1638,13 @@ def _check_packet_size(name: str, value: object) -> None:
 class Dynet2Message(ABC):
     """Base class for messages carried in DyNet 2 frames.
 
-    aiodynet decodes these but can't send DyNet 2, so they aren't `Message`s
-    and `DynetClient.send` doesn't take them.
+    They aren't `Message`s, because they encode to a `Dynet2Frame` rather than
+    a `Packet`. `DynetClient.send` takes them too.
     """
 
     @abstractmethod
     def to_frame(self) -> Dynet2Frame:
-        """Encode the message as a frame, for example to play a device in tests."""
+        """Encode the message as a frame."""
 
 
 def _check_raw(name: str, value: object, length: int) -> None:
@@ -1816,8 +1816,7 @@ class Dynet2RequestSerialNumber(Dynet2Message):
 
     Byte 2 = 0x80 is a request. The device answers with a
     `Dynet2SerialNumberReply`. System Builder (device 0xDA box 1) sends one to
-    each device it sees sign on or identify itself. aiodynet decodes these
-    but can't send them.
+    each device it sees sign on or identify itself.
     """
 
     device_code: int

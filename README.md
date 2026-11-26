@@ -92,7 +92,16 @@ the order they arrived, `DynetClient.subscribe` callbacks get both, and
 | `Dynet2SerialNumberReply` | reply (0x81), type 0x0A | A device's serial number |
 | `UnknownDynet2Message` | anything else | Passed through unchanged, frame included |
 
-aiodynet decodes DyNet 2 messages but can't send them.
+`send` takes DyNet 2 messages and raw `Dynet2Frame`s as well. A real gateway
+passes a frame from one client on to its other clients, and answers some
+itself: it replies to its own "Request Who are you" (type 0x0C), for example.
+Whether it also puts client frames on the RS-485 bus hasn't been checked.
+
+```python
+await client.send(
+    Dynet2Frame.from_hex("ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00")
+)
+```
 
 To find out what a device is, ask it to sign on:
 
@@ -203,7 +212,7 @@ or `async with DynetClient(host, port) as client:`.
   (`False`) and reconnects (`True`). `client.connected` gives the current
   state.
 - **Sending.** `await send(message_or_packet)` returns once the packet has been
-  written. Packets go out one at a time, 0.2 s apart by default
+  written. Packets and DyNet 2 frames go out one at a time, 0.2 s apart by default
   (`send_interval`). If the client isn't connected, or the connection drops
   before the packet is written, `send` raises `NotConnectedError`. Nothing is
   kept to send later, so a command can't fire long after it was asked for.

@@ -9,11 +9,13 @@ import socket
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Self, cast, overload
 
+from .dynet2 import Dynet2Frame
 from .errors import DynetConnectionError, NotConnectedError
 from .framing import PacketFramer
 from .messages import (
     AnyMessage,
     ChannelLevelReport,
+    Dynet2Message,
     Dynet2SignonReply,
     Message,
     PresetReport,
@@ -23,9 +25,6 @@ from .messages import (
     decode,
 )
 from .packet import Packet
-
-if TYPE_CHECKING:
-    from .dynet2 import Dynet2Frame
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -270,14 +269,25 @@ class DynetClient:
         """
         return self._add(self._connection_callbacks, callback)
 
-    async def send(self, message: Message | Packet) -> None:
-        """Send a message or a raw packet, and wait until it has been written.
+    async def send(
+        self, message: Message | Dynet2Message | Packet | Dynet2Frame
+    ) -> None:
+        """Send a message, packet or DyNet 2 frame, and wait until it's written.
+
+        DyNet 2 messages and frames go through the same queue as packets, so
+        they are paced `send_interval` apart too.
 
         Raises `NotConnectedError` if the client isn't connected, or if the
         connection drops before the packet is written. Nothing is queued for
         later, so a command is never sent long after it was asked for.
         """
-        packet = message if isinstance(message, Packet) else message.to_packet()
+        packet: Packet | Dynet2Frame
+        if isinstance(message, (Packet, Dynet2Frame)):
+            packet = message
+        elif isinstance(message, Dynet2Message):
+            packet = message.to_frame()
+        else:
+            packet = message.to_packet()
         if not self.connected:
             msg = f"Not connected to {self.host}:{self.port}"
             raise NotConnectedError(msg)

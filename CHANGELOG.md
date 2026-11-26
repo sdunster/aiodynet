@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `DynetClient.send` also takes DyNet 2 messages (`Dynet2Message`) and raw
+  `Dynet2Frame`s. They share the packet queue and pacing. A real gateway
+  passes them on to its other clients, and System Builder decodes them.
 - `Dynet2RequestSerialNumber` and `Dynet2SerialNumberReply` type the DyNet 2
   serial number request and reply (type 0x0A), which `decode` used to return
   as `UnknownDynet2Message`. Code that matches exhaustively on

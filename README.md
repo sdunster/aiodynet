@@ -139,7 +139,7 @@ in the DyNet tools and on keypads.
 | `ChannelLevelReport` | 0x60 | A channel reports its target and actual level |
 | `RequestChannelLevel` | 0x61 | Ask a channel for its level |
 | `FadeChannelToPreset` | 0x6B | Fade one channel, or every channel, to a preset's level |
-| `AreaCommand` | 0x05, 0x06, 0x08, 0x15, 0x16, 0x66 | Area commands with no data: step the area level down or up, program the current preset, disable or enable panels, save the current preset (`AreaCommandType`) |
+| `AreaCommand` | 0x05, 0x06, 0x08, 0x15, 0x16, 0x66 | Area commands with no data: step the area level down or up, program the current preset, disable or enable panels, save the current preset (`AreaCommandType`). Byte 2 is kept as `channel_raw` (0 by default; System Builder sends 0xFF for panel commands) |
 | `AreaOff`, `RecallPreviousPreset`, `Panic`, `Unpanic` | 0x04, 0x0F, 0x17, 0x18 | Area commands with a preset-style fade. System Builder calls 0x0F "Recall Previous Preset", 0x17 "Disable Panels and recall Panic Preset" and 0x18 "Enable Panels and recall Previous Preset" |
 | `AreaToLevel` | 0x79 | Fade every channel in an area to one level |
 | `ChannelOff`, `ChannelOn` | 0x74, 0x75 | Fade a channel, or every channel, to off or full |
@@ -294,6 +294,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `RequestPreset`, `RequestChannelLevel` | Byte-for-byte match with `dynalite-devices` 0.1.47 |
 | `PresetReport`, `LinearPresetSelect`, `ChannelLevelReport`, `FadeChannelToPreset` | Opcode list, plus the meaning `dynalite-devices` 0.1.47 takes from them. Not yet checked against captured traffic |
 | `FadeChannelToPreset` fade unit | Unknown, so it's kept as a raw byte |
+| `AreaCommand` enable/disable panels with byte 2 = 0x00 | On hardware: `1c 05 00 15 00 00 ff` disabled the panels in area 5 (backlight off, presses ignored) exactly as System Builder's 0xFF form does, and `1c 05 00 16 00 00 ff` enabled them again |
 | `AreaOff` (0x04 is "Recall Off Preset", not preset 5) | Opcode list, plus hardware: `1c 13 00 04 00 00 ff` took the area's channel to 0 % while the area still reported preset 1, and the official DyNet network monitor shows it as "Recall Off Preset with a fade of 0.00s". Some other implementations read 0x00–0x03 and 0x0A–0x0D as eight presets per bank and treat 0x04 as preset 5; that is wrong for this opcode |
 | `MotionActivitySync`, `UserPreferenceReport`, `ClockTime`, `ClockDate` | Opcode list, plus packets captured on a real site (`tests/fixtures/site-capture.jsonl`). The clock bytes are BCD, and the date packs the day of the week into the top three bits of the month byte; both inferred from that capture |
 | All other extended messages | Byte layout from the opcode list only |

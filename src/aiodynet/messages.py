@@ -708,6 +708,11 @@ class AreaCommand(LogicalMessage):
 
     command: AreaCommandType
 
+    channel_raw: int = 0
+    """Byte 2, kept as sent. System Builder sends 0xFF ("all channels") for
+    enable and disable panels; panels at one site acted on 0x00 and 0xFF
+    alike. What it means for the other commands is unchecked."""
+
     @override
     def __post_init__(self) -> None:
         LogicalMessage.__post_init__(self)
@@ -717,16 +722,19 @@ class AreaCommand(LogicalMessage):
                 f"command must be an AreaCommandType, not {type(self.command).__name__}"
             )
             raise TypeError(msg)
+        _check_int("channel_raw", self.channel_raw, 0, 0xFF)
 
     @override
     def to_packet(self) -> Packet:
-        return self._packet(0, self.command, 0, 0)
+        return self._packet(self.channel_raw, self.command, 0, 0)
 
     @override
     @classmethod
     def from_packet(cls, packet: Packet) -> Self:
-        _, area, _, opcode, _, _, join = packet.data
-        return cls(area=area, command=AreaCommandType(opcode), join=join)
+        _, area, channel, opcode, _, _, join = packet.data
+        return cls(
+            area=area, command=AreaCommandType(opcode), channel_raw=channel, join=join
+        )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

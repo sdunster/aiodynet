@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `AreaCommand.channel_raw` keeps byte 2, so System Builder's enable and
+  disable panels (`1c AREA ff 15/16 …`) decode and re-encode unchanged; it
+  used to come back with 0 there. The default is 0, so the bytes sent for an
+  `AreaCommand` without it don't change. Panels act on either form.
 - `Dynet2MemoryErrorReply` types a device refusing a `Dynet2ReadMemory`:
   a 0x9B frame with 0x10 set in the selector's first byte and one data byte,
   the error code. `MemoryErrorCode.MEMORY_DOES_NOT_EXIST` (19) is System

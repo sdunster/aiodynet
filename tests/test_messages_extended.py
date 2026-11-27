@@ -92,6 +92,16 @@ ENCODINGS: list[tuple[Message, str]] = [
     ),
     (AreaCommand(area=5, command=AreaCommandType.DISABLE_PANELS), "1c0500150000ff"),
     (AreaCommand(area=5, command=AreaCommandType.ENABLE_PANELS), "1c0500160000ff"),
+    # System Builder's form, with 0xFF ("all channels") in byte 2; panels act on
+    # both. Sent at one site to the pantry panel's area.
+    (
+        AreaCommand(area=5, command=AreaCommandType.DISABLE_PANELS, channel_raw=0xFF),
+        "1c05ff150000ff",
+    ),
+    (
+        AreaCommand(area=5, command=AreaCommandType.ENABLE_PANELS, channel_raw=0xFF),
+        "1c05ff160000ff",
+    ),
     (
         AreaCommand(area=5, command=AreaCommandType.SAVE_CURRENT_PRESET),
         "1c0500660000ff",
@@ -201,6 +211,13 @@ def test_other_physical_opcodes_stay_unknown() -> None:
             lambda: AreaCommand(area=1, command=5),  # type: ignore[arg-type]
             TypeError,
             "AreaCommandType",
+        ),
+        (
+            lambda: AreaCommand(
+                area=1, command=AreaCommandType.ENABLE_PANELS, channel_raw=256
+            ),
+            ValueError,
+            "channel_raw must be 0-255",
         ),
         (lambda: AreaOff(area=1, fade=2000), ValueError, "too long"),
         (

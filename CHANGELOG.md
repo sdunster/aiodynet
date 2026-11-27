@@ -15,6 +15,15 @@
   Level": one channel of one device, not a logical area. Its level is not
   inverted (0 off, 0xFE = `PHYSICAL_LEVEL_FULL` = 100 %), and
   `from_percent` builds one. The fade byte is kept raw (only 0 seen).
+- DyNet 2 device commands. `Dynet2DeviceRequest` is a request (0x80)
+  carrying one `Dynet2Command`: `SIGNON`, `BOOTLOADER_SIGNON`,
+  `FIRMWARE_BUILD`, `BOOTLOADER_BUILD`, `PCB_VERSION`, `SILENCE` (System
+  Builder's "flash": the device blinks and stops sending), `GO_BACK_TO_WORK`
+  and `RESET`. The serial number request stays `Dynet2RequestSerialNumber`.
+  The new replies are `Dynet2BuildNumberReply` and `Dynet2PcbVersionReply`,
+  and `Dynet2SignonReply.bootloader` marks the bootloader's sign-on (byte 9
+  = 0x02), which used to decode as `UnknownDynet2Message`. Code that matches
+  exhaustively on `AnyDynet2Message` needs cases for the new classes.
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

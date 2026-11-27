@@ -24,9 +24,7 @@ from aiodynet import (
     ClockDate,
     ClockTime,
     Dynet2Frame,
-    Dynet2RequestSerialNumber,
-    Dynet2SerialNumberReply,
-    Dynet2SignonReply,
+    Dynet2Message,
     FadeChannelToPreset,
     Level,
     LinearPresetSelect,
@@ -310,14 +308,10 @@ def describe(message: AnyMessage) -> str:  # noqa: C901, PLR0911
             return "other physical"
         case LogicalMessage():
             return "other logical"
-        case (
-            Dynet2SignonReply()
-            | Dynet2RequestSerialNumber()
-            | Dynet2SerialNumberReply()
-        ):
-            return "dynet 2"
         case UnknownMessage() | UnknownDynet2Message():
             return "unknown"
+        case Dynet2Message():
+            return "dynet 2"
         case _:
             assert_never(message)
 

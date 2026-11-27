@@ -61,7 +61,11 @@ __all__ = [
     "DeviceIdentify",
     "DeviceStatusReport",
     "DeviceStatusType",
+    "Dynet2BuildNumberReply",
+    "Dynet2Command",
+    "Dynet2DeviceRequest",
     "Dynet2Message",
+    "Dynet2PcbVersionReply",
     "Dynet2SignonReply",
     "FadeChannelToLevel",
     "FadeChannelToPreset",
@@ -1846,6 +1850,11 @@ class UnknownMessage(Message):
 _REQUEST_CLASS = 0x80
 _REPLY_CLASS = 0x81
 _SIGNON_TYPE = 0x01
+_BOOTLOADER_SIGNON_TYPE = 0x02
+_DEVICE_REQUEST_LENGTH = 12
+_SHORT_REPLY_LENGTH = 16
+_BUILD_REPLY_CODE = 0x06
+_PCB_REPLY_CODE = 0x0F
 _SIGNON_REPLY_LENGTH = 20
 _SIGNON_EXTENSION_LENGTH = 24
 _SIGNON_IPV6 = slice(5, 21)
@@ -1859,6 +1868,41 @@ def _check_packet_size(name: str, value: object) -> None:
     if cast("int", value) % 4:
         msg = f"{name} must be a multiple of 4, got {value}"
         raise ValueError(msg)
+
+
+class Dynet2Command(IntEnum):
+    """The commands in a DyNet 2 device request (frame type 0x80, byte 9).
+
+    Names follow System Builder. Each was sent to a D5Sen and an Antumbra
+    panel at one site, and the replies matched what System Builder shows.
+    """
+
+    RESET = 0x00
+    """"Reset the device". It restarts and sends a `DeviceIdentify` with
+    `after_reset` set. No other reply."""
+    SIGNON = 0x01
+    """"Request the device sign on". Answered by a `Dynet2SignonReply`."""
+    BOOTLOADER_SIGNON = 0x02
+    """Sign on with the bootloader's version. Answered by a
+    `Dynet2SignonReply` with `bootloader` set."""
+    FIRMWARE_BUILD = 0x06
+    """"Request device firmware build number". Answered by a
+    `Dynet2BuildNumberReply`."""
+    BOOTLOADER_BUILD = 0x07
+    """"Request device bootloader firmware build number". Answered by a
+    `Dynet2BuildNumberReply` with `bootloader` set."""
+    SILENCE = 0x08
+    """"Silence. Listen to me": the device stops sending and blinks three
+    times. System Builder's "flash" (identify) resends it every 2 s, and
+    sends it once before writing to a device's memory. No reply."""
+    GO_BACK_TO_WORK = 0x09
+    """"Go back to work": ends `SILENCE`. No reply."""
+    SERIAL_NUMBER = 0x0A
+    """Sent as `Dynet2RequestSerialNumber`; answered by a
+    `Dynet2SerialNumberReply`."""
+    PCB_VERSION = 0x0F
+    """"Request PCB assembly version and revision". Answered by a
+    `Dynet2PcbVersionReply`."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1887,17 +1931,18 @@ def _check_raw(name: str, value: object, length: int) -> None:
 class Dynet2SignonReply(Dynet2Message):
     """A device announcing itself, the DyNet 2 "Reply Device Signon".
 
-    A device sends one when it gets a `RequestSignon` addressed to it. The
-    layout, checked field by field against the official DyNet network
-    monitor::
+    A device sends one when it gets a `RequestSignon` addressed to it, or a
+    `Dynet2DeviceRequest` for `SIGNON` or `BOOTLOADER_SIGNON`. The layout,
+    checked field by field against the official DyNet network monitor::
 
         ac 04 | 81 | source: dev box box | target: dev box box | 01 | rr rr
               | firmware: major minor | max rx | max tx | port | slave | C2 C1
 
-    Byte 2 = 0x81 is a reply. A 20-byte reply with byte 9 = 0x01 is taken to be
-    a sign-on, because another 0x81 reply seen on the bus has 0x0A there and
-    isn't one. That rule rests on one confirmed frame. Bytes 10-11 (``rr``) are
-    unknown and are kept raw.
+    Byte 2 = 0x81 is a reply, and byte 9 echoes the request's command: 0x01
+    for the application's sign-on, 0x02 ("Reply Device Bootloader Signing")
+    for the bootloader's, whose firmware fields then hold the bootloader's
+    version (`bootloader`). Bytes 10-11 (``rr``) are unknown and are kept
+    raw.
 
     A 44-byte form adds 24 bytes before the checksum (`extension_raw`). One
     device sent it, a DALI controller that is also an Ethernet bridge::
@@ -1933,6 +1978,8 @@ class Dynet2SignonReply(Dynet2Message):
     """Bytes 10-11, meaning unknown."""
     extension_raw: bytes = b""
     """Bytes 18-41 of the 44-byte form, or empty for the 20-byte form."""
+    bootloader: bool = False
+    """Whether this is the bootloader's sign-on (byte 9 = 0x02)."""
 
     def __post_init__(self) -> None:
         """Check every field fits its byte(s)."""
@@ -1978,7 +2025,7 @@ class Dynet2SignonReply(Dynet2Message):
             len(frame)
             in (_SIGNON_REPLY_LENGTH, _SIGNON_REPLY_LENGTH + _SIGNON_EXTENSION_LENGTH)
             and body[0] == _REPLY_CLASS
-            and body[7] == _SIGNON_TYPE
+            and body[7] in (_SIGNON_TYPE, _BOOTLOADER_SIGNON_TYPE)
         ):
             msg = f"Not a DyNet 2 sign-on reply: {frame.hex()}"
             raise ValueError(msg)
@@ -1995,6 +2042,7 @@ class Dynet2SignonReply(Dynet2Message):
             port=body[14],
             slave=body[15],
             extension_raw=body[16:],
+            bootloader=body[7] == _BOOTLOADER_SIGNON_TYPE,
         )
 
     @override
@@ -2004,7 +2052,7 @@ class Dynet2SignonReply(Dynet2Message):
             + self.box.to_bytes(2)
             + bytes((self.target_device_code,))
             + self.target_box.to_bytes(2)
-            + bytes((_SIGNON_TYPE,))
+            + bytes((_BOOTLOADER_SIGNON_TYPE if self.bootloader else _SIGNON_TYPE,))
             + self.reserved_raw
             + bytes(
                 (
@@ -2155,6 +2203,213 @@ class Dynet2SerialNumberReply(Dynet2Message):
         )
 
 
+def _check_bool(name: str, value: object) -> None:
+    if not isinstance(value, bool):
+        msg = f"{name} must be a bool, not {type(value).__name__}"
+        raise TypeError(msg)
+
+
+def _reply_body(
+    frame: Dynet2Frame, commands: tuple[int, ...], length: int, what: str
+) -> bytes:
+    """Return the body of a 0x81 reply to one of `commands`, or raise."""
+    body = frame.body
+    if not (len(frame) == length and body[0] == _REPLY_CLASS and body[7] in commands):
+        msg = f"Not a DyNet 2 {what}: {frame.hex()}"
+        raise ValueError(msg)
+    return body
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2DeviceRequest(Dynet2Message):
+    """A command to one device: DyNet 2 request (0x80) with one command byte.
+
+    Layout::
+
+        ac 02 | 80 | source: dev box box | target: dev box box | command | C2 C1
+
+    `command` is a `Dynet2Command`, or any other byte (kept as an int).
+    `SERIAL_NUMBER` has its own class, `Dynet2RequestSerialNumber`, so this
+    one refuses it. System Builder sends these from device 0xDA box 1, and
+    replies are addressed back to the source.
+    """
+
+    device_code: int
+    """The device the command is for."""
+    box: int
+    source_device_code: int
+    """Who is sending it; replies are addressed here."""
+    source_box: int
+    command: int
+    """What to do, 0-255 (`Dynet2Command`)."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "source_")
+        _check_int("command", self.command, 0, 0xFF)
+        if self.command == Dynet2Command.SERIAL_NUMBER:
+            msg = "command 0x0a is the serial number: use Dynet2RequestSerialNumber"
+            raise ValueError(msg)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a device request. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        if not (len(frame) == _DEVICE_REQUEST_LENGTH and body[0] == _REQUEST_CLASS):
+            msg = f"Not a DyNet 2 device request: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            source_device_code=body[1],
+            source_box=int.from_bytes(body[2:4]),
+            device_code=body[4],
+            box=int.from_bytes(body[5:7]),
+            command=body[7],
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            bytes((_REQUEST_CLASS,))
+            + _address(self.source_device_code, self.source_box)
+            + _address(self.device_code, self.box)
+            + bytes((self.command,))
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2BuildNumberReply(Dynet2Message):
+    """A device's firmware or bootloader build number.
+
+    The answer to a `Dynet2DeviceRequest` for `FIRMWARE_BUILD` or
+    `BOOTLOADER_BUILD`. Layout::
+
+        ac 03 | 81 | source: dev box box | target: dev box box | 06 or 07 | 06
+              | 00 or 01 | build: 2 bytes | C2 C1
+
+    Byte 9 echoes the command. Byte 11 was 0x00 for the firmware and 0x01 for
+    the bootloader; a reply whose byte 11 doesn't match its command decodes
+    as `UnknownDynet2Message`. System Builder shows both as "Main device".
+    Byte 10 was always 0x06 and is kept raw. Build 1 was the only value
+    seen, so the byte order is assumed big-endian like the other fields.
+    """
+
+    device_code: int
+    """The device the build number belongs to."""
+    box: int
+    target_device_code: int
+    """Who the reply is addressed to: the device that asked."""
+    target_box: int
+    bootloader: bool
+    """Whether this is the bootloader's build number, not the firmware's."""
+    build: int
+    """The build number, 0-65535."""
+    reserved_raw: bytes = bytes((_BUILD_REPLY_CODE,))
+    """Byte 10."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "target_")
+        _check_bool("bootloader", self.bootloader)
+        _check_int("build", self.build, 0, 0xFFFF)
+        _check_raw("reserved_raw", self.reserved_raw, 1)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a build number reply. Raises `ValueError` if the frame isn't one."""
+        commands = (Dynet2Command.FIRMWARE_BUILD, Dynet2Command.BOOTLOADER_BUILD)
+        body = _reply_body(frame, commands, _SHORT_REPLY_LENGTH, "build number reply")
+        bootloader = body[7] == Dynet2Command.BOOTLOADER_BUILD
+        if body[9] != bootloader:
+            msg = f"Build number reply byte 11 doesn't match its command: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            bootloader=bootloader,
+            reserved_raw=body[8:9],
+            build=int.from_bytes(body[10:12]),
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        command = (
+            Dynet2Command.BOOTLOADER_BUILD
+            if self.bootloader
+            else Dynet2Command.FIRMWARE_BUILD
+        )
+        return Dynet2Frame.build(
+            bytes((_REPLY_CLASS,))
+            + _address(self.device_code, self.box)
+            + _address(self.target_device_code, self.target_box)
+            + bytes((command,))
+            + self.reserved_raw
+            + bytes((int(self.bootloader),))
+            + self.build.to_bytes(2)
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2PcbVersionReply(Dynet2Message):
+    """A device's circuit board (PCB assembly) version and revision.
+
+    The answer to a `Dynet2DeviceRequest` for `PCB_VERSION`. Layout::
+
+        ac 03 | 81 | source: dev box box | target: dev box box | 0f | 0f | 00
+              | version | revision | C2 C1
+
+    System Builder shows ``0f 0f 00 01 02`` as "PCB version 1, revision 2",
+    which matches the "1.2" its job records for that D5Sen. Bytes 10-11 are
+    kept raw (System Builder calls 0x00 in byte 11 the "Main device").
+    """
+
+    device_code: int
+    """The device the version belongs to."""
+    box: int
+    target_device_code: int
+    """Who the reply is addressed to: the device that asked."""
+    target_box: int
+    version: int
+    revision: int
+    reserved_raw: bytes = bytes((_PCB_REPLY_CODE, 0))
+    """Bytes 10-11."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "target_")
+        _check_int("version", self.version, 0, 0xFF)
+        _check_int("revision", self.revision, 0, 0xFF)
+        _check_raw("reserved_raw", self.reserved_raw, 2)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a PCB version reply. Raises `ValueError` if the frame isn't one."""
+        body = _reply_body(
+            frame, (Dynet2Command.PCB_VERSION,), _SHORT_REPLY_LENGTH, "PCB reply"
+        )
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            reserved_raw=body[8:10],
+            version=body[10],
+            revision=body[11],
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            bytes((_REPLY_CLASS,))
+            + _address(self.device_code, self.box)
+            + _address(self.target_device_code, self.target_box)
+            + bytes((Dynet2Command.PCB_VERSION,))
+            + self.reserved_raw
+            + bytes((self.version, self.revision))
+        )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownDynet2Message(Dynet2Message):
     """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
@@ -2218,6 +2473,9 @@ type AnyDynet2Message = (
     Dynet2SignonReply
     | Dynet2RequestSerialNumber
     | Dynet2SerialNumberReply
+    | Dynet2DeviceRequest
+    | Dynet2BuildNumberReply
+    | Dynet2PcbVersionReply
     | UnknownDynet2Message
 )
 """Every message `decode` can return for a `Dynet2Frame`."""
@@ -2272,10 +2530,16 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     PhysicalStateReport,
 )
 
-_DYNET2_TYPES: tuple[
-    type[Dynet2SignonReply | Dynet2RequestSerialNumber | Dynet2SerialNumberReply],
-    ...,
-] = (Dynet2SignonReply, Dynet2RequestSerialNumber, Dynet2SerialNumberReply)
+_Dynet2Decoder = Callable[[Dynet2Frame], "AnyDynet2Message"]
+_DYNET2_TYPES: tuple[_Dynet2Decoder, ...] = (
+    # The serial number request comes before the generic device request.
+    Dynet2SignonReply.from_frame,
+    Dynet2RequestSerialNumber.from_frame,
+    Dynet2SerialNumberReply.from_frame,
+    Dynet2DeviceRequest.from_frame,
+    Dynet2BuildNumberReply.from_frame,
+    Dynet2PcbVersionReply.from_frame,
+)
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]
 _DECODERS: dict[tuple[int, int], list[_Decoder]] = {}
@@ -2309,9 +2573,9 @@ def decode(raw: Packet | Dynet2Frame) -> AnyMessage:
     typed message comes back as `UnknownMessage` or `UnknownDynet2Message`.
     """
     if isinstance(raw, Dynet2Frame):
-        for dynet2_type in _DYNET2_TYPES:
+        for dynet2_decoder in _DYNET2_TYPES:
             try:
-                return dynet2_type.from_frame(raw)
+                return dynet2_decoder(raw)
             except ValueError:
                 pass
         return UnknownDynet2Message(frame=raw)

@@ -87,9 +87,12 @@ the order they arrived, `DynetClient.subscribe` callbacks get both, and
 
 | Message | Frame | Meaning |
 |---|---|---|
-| `Dynet2SignonReply` | reply (0x81), type 0x01 | A device's address, firmware version and maximum packet sizes, in answer to `RequestSignon`. A 44-byte form also carries an IPv6 address |
+| `Dynet2SignonReply` | reply (0x81), type 0x01 or 0x02 | A device's address, firmware version and maximum packet sizes, in answer to `RequestSignon` or a sign-on `Dynet2DeviceRequest`. Type 0x02 (`bootloader`) gives the bootloader's version. A 44-byte form also carries an IPv6 address |
 | `Dynet2RequestSerialNumber` | request (0x80), type 0x0A | Ask a device for its serial number. System Builder sends these |
 | `Dynet2SerialNumberReply` | reply (0x81), type 0x0A | A device's serial number |
+| `Dynet2DeviceRequest` | request (0x80), any other type | A `Dynet2Command` for one device: sign on, bootloader sign-on, firmware or bootloader build number, PCB version, silence ("flash"), go back to work, reset |
+| `Dynet2BuildNumberReply` | reply (0x81), type 0x06 or 0x07 | The firmware's or bootloader's build number |
+| `Dynet2PcbVersionReply` | reply (0x81), type 0x0F | The circuit board's version and revision |
 | `UnknownDynet2Message` | anything else | Passed through unchanged, frame included |
 
 `send` takes DyNet 2 messages and raw `Dynet2Frame`s as well. A real gateway
@@ -277,6 +280,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `RequestFirmwareVersion` | Opcode list, plus requests sent to 45 devices at one site. Each answered with a `DeviceIdentify` from its own address, with the version the site's System Builder job records |
 | `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device. The 44-byte form comes from one frame, sent by a DALI controller that is also an Ethernet bridge: its 16 extra address bytes were that device's IPv6 address. Its source was the all-devices address, so `query` can't match it to the request |
 | `Dynet2RequestSerialNumber`, `Dynet2SerialNumberReply` | Requests from System Builder and the replies to them, captured at one site. The serial numbers in 44 replies were checked against that site's System Builder job: 42 matched, and the other two devices had been replaced since the job was last updated. Byte 10 of the reply and its three trailing zero bytes are kept raw |
+| `Dynet2DeviceRequest`, `Dynet2BuildNumberReply`, `Dynet2PcbVersionReply`, `Dynet2SignonReply.bootloader` | Each command sent to a D5Sen (and silence / go back to work to an Antumbra panel) at one site, from System Builder's address, with System Builder labelling the requests and replies. The PCB version matched System Builder's job. Reset and silence were captured from System Builder itself. The build number's byte order is assumed (only build 1 seen) |
 | DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 
 The `dynalite-devices` comparison was made black-box: by driving its public

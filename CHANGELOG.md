@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Breaking:** `ResetPreset` is renamed `RecallPreviousPreset`, and
+  `Opcode.RESET_PRESET` is `Opcode.RECALL_PREVIOUS_PRESET`, after System
+  Builder's name for opcode 0x0F, "Recall Previous Preset". The bytes are
+  unchanged.
 - `DynetClient.query` waits for the answers to `RequestDeviceStatus`,
   `Dynet2RequestSerialNumber`, `Dynet2DeviceRequest` (sign-on, bootloader
   sign-on, build numbers, PCB version), `Dynet2ReadMemory` and the
@@ -64,8 +68,6 @@
   `SetAreaLinks` / `ClearAreaLinks` / `AreaLinksReport` /
   `RequestAreaLinks` (0x20-0x23), `SetRMask` (0x40), `RampToLevelExceptOff`
   (0x5F) and `SetPresetBank` (0x64). They used to decode as `UnknownMessage`.
-  `ResetPreset`'s docstring now gives System Builder's name for 0x0F,
-  "Recall Previous Preset".
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

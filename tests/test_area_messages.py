@@ -16,8 +16,8 @@ from aiodynet import (
     OccupancyDetectionAllPresets,
     Packet,
     RampToLevelExceptOff,
+    RecallPreviousPreset,
     RequestAreaLinks,
-    ResetPreset,
     SetAreaLinks,
     SetJoinLevel,
     SetPresetBank,
@@ -30,7 +30,7 @@ SITE_VECTORS: list[tuple[str, Message]] = [
     # "Ramp Channels toward Exclude with a ramp rate of 0.00s", channel All
     ("1c08ff5f0000ff", RampToLevelExceptOff(area=8)),
     # "Recall Previous Preset with a fade of 0.00s"
-    ("1c08000f0000ff", ResetPreset(area=8)),
+    ("1c08000f0000ff", RecallPreviousPreset(area=8)),
     # "Resume Light Control for all Presets" / "Suspend ..."
     ("1c08ff110001ff", LightControlAllPresets(area=8, resume=True)),
     ("1c08ff110000ff", LightControlAllPresets(area=8, resume=False)),

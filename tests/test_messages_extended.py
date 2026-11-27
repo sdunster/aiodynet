@@ -36,10 +36,10 @@ from aiodynet import (
     PresetLevelReport,
     PresetSelect,
     ProgramLevelsToPreset,
+    RecallPreviousPreset,
     RequestFirmwareVersion,
     RequestPresetLevel,
     RequestUserPreference,
-    ResetPreset,
     RestoreSavedPreset,
     ResumeOccupancyDetection,
     SetUserPreference,
@@ -97,7 +97,7 @@ ENCODINGS: list[tuple[Message, str]] = [
         "1c0500660000ff",
     ),
     (AreaOff(area=5, fade=1000), "1c055004c300ff"),
-    (ResetPreset(area=5, fade=1), "1c05320f0000ff"),
+    (RecallPreviousPreset(area=5, fade=1), "1c05320f0000ff"),
     (Panic(area=5), "1c0500170000ff"),
     (Unpanic(area=5, fade=0.5), "1c0519180000ff"),
     (AreaToLevel(area=5, level=Level.FULL, fade=1000), "1c05017950c3ff"),
@@ -304,7 +304,7 @@ extended_messages: st.SearchStrategy[Message] = st.one_of(
     ),
     *(
         st.builds(cls, area=areas, fade=fades, join=joins)
-        for cls in (AreaOff, ResetPreset, Panic, Unpanic)
+        for cls in (AreaOff, RecallPreviousPreset, Panic, Unpanic)
     ),
     st.builds(AreaToLevel, area=areas, level=levels, fade=fades, join=joins),
     *(

@@ -104,6 +104,7 @@ __all__ = [
     "ProgramLevelsToPreset",
     "RampToLevelExceptOff",
     "RawLightLevelReport",
+    "RecallPreviousPreset",
     "RequestAreaLinks",
     "RequestChannelLevel",
     "RequestDeviceStatus",
@@ -112,7 +113,6 @@ __all__ = [
     "RequestPresetLevel",
     "RequestSignon",
     "RequestUserPreference",
-    "ResetPreset",
     "RestoreSavedPreset",
     "ResumeOccupancyDetection",
     "SetAreaLinks",
@@ -149,7 +149,7 @@ class Opcode(IntEnum):
     PRESET_6 = 0x0B
     PRESET_7 = 0x0C
     PRESET_8 = 0x0D
-    RESET_PRESET = 0x0F
+    RECALL_PREVIOUS_PRESET = 0x0F
     LIGHT_CONTROL_ALL_PRESETS = 0x11
     SET_JOIN_LEVEL = 0x14
     DISABLE_PANELS = 0x15
@@ -762,16 +762,15 @@ class AreaOff(_AreaFadeMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ResetPreset(_AreaFadeMessage):
+class RecallPreviousPreset(_AreaFadeMessage):
     """Recall an area's previous preset (opcode 0x0F).
 
     System Builder labels ``1c 08 00 0f 00 00`` "Recall Previous Preset with a
-    fade of 0.00s". (The class name comes from an earlier reading of the
-    opcode list, "reset preset", and is kept for compatibility.)
+    fade of 0.00s".
     """
 
-    opcode: ClassVar[int] = Opcode.RESET_PRESET
-    opcodes: ClassVar[tuple[int, ...]] = (Opcode.RESET_PRESET,)
+    opcode: ClassVar[int] = Opcode.RECALL_PREVIOUS_PRESET
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.RECALL_PREVIOUS_PRESET,)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3573,7 +3572,7 @@ type AnyDynet1Message = (
     | FadeChannelToPreset
     | AreaCommand
     | AreaOff
-    | ResetPreset
+    | RecallPreviousPreset
     | Panic
     | Unpanic
     | AreaToLevel
@@ -3652,7 +3651,7 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     FadeChannelToPreset,
     AreaCommand,
     AreaOff,
-    ResetPreset,
+    RecallPreviousPreset,
     Panic,
     Unpanic,
     AreaToLevel,

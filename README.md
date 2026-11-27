@@ -139,7 +139,7 @@ in the DyNet tools and on keypads.
 | `RequestChannelLevel` | 0x61 | Ask a channel for its level |
 | `FadeChannelToPreset` | 0x6B | Fade one channel, or every channel, to a preset's level |
 | `AreaCommand` | 0x05, 0x06, 0x08, 0x15, 0x16, 0x66 | Area commands with no data: step the area level down or up, program the current preset, disable or enable panels, save the current preset (`AreaCommandType`) |
-| `AreaOff`, `ResetPreset`, `Panic`, `Unpanic` | 0x04, 0x0F, 0x17, 0x18 | Area commands with a preset-style fade. System Builder calls 0x0F "Recall Previous Preset", 0x17 "Disable Panels and recall Panic Preset" and 0x18 "Enable Panels and recall Previous Preset" |
+| `AreaOff`, `RecallPreviousPreset`, `Panic`, `Unpanic` | 0x04, 0x0F, 0x17, 0x18 | Area commands with a preset-style fade. System Builder calls 0x0F "Recall Previous Preset", 0x17 "Disable Panels and recall Panic Preset" and 0x18 "Enable Panels and recall Previous Preset" |
 | `AreaToLevel` | 0x79 | Fade every channel in an area to one level |
 | `ChannelOff`, `ChannelOn` | 0x74, 0x75 | Fade a channel, or every channel, to off or full |
 | `StopFade` | 0x76 | Stop a channel, or every channel, mid-fade |

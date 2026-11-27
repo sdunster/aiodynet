@@ -238,8 +238,9 @@ or `async with DynetClient(host, port) as client:`.
   `DeviceStatusReport`. For DyNet 2: a `Dynet2RequestSerialNumber` returns
   the `Dynet2SerialNumberReply`; a `Dynet2DeviceRequest` the sign-on,
   build-number or PCB reply to its command; a `Dynet2ReadMemory` the
-  `Dynet2MemoryData`; and a light-level `Dynet2StatusRequest` the
-  `PhysicalStateReport`. Requests that get no reply (silence, reset) raise
+  `Dynet2MemoryData`; a light-level `Dynet2StatusRequest` the
+  `PhysicalStateReport`; and a `Dynet2RequestChannelLevel` the
+  `Dynet2ChannelLevelReport`. Requests that get no reply (silence, reset) raise
   `ValueError`; `send` them instead.
 - **Closing.** `close` cancels everything the client started and closes the
   socket. No callbacks run after it begins.

@@ -6,7 +6,9 @@
   `Dynet2RequestSerialNumber`, `Dynet2DeviceRequest` (sign-on, bootloader
   sign-on, build numbers, PCB version), `Dynet2ReadMemory` and the
   light-level `Dynet2StatusRequest`. A request that gets no answer raises
-  `ValueError`. `query(RequestSignon(...))` now skips a bootloader sign-on
+  `ValueError`. A `Dynet2RequestChannelLevel` waits for the
+  `Dynet2ChannelLevelReport` for its area and channel.
+  `query(RequestSignon(...))` now skips a bootloader sign-on
   reply from the same device.
 - `FakeGateway(frame_replies=...)` answers DyNet 2 frames that clients send,
   as `replies` does for packets, and `received_frames` records them.

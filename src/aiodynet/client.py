@@ -18,12 +18,14 @@ from .messages import (
     ChannelLevelReport,
     DeviceStatusReport,
     Dynet2BuildNumberReply,
+    Dynet2ChannelLevelReport,
     Dynet2Command,
     Dynet2DeviceRequest,
     Dynet2MemoryData,
     Dynet2Message,
     Dynet2PcbVersionReply,
     Dynet2ReadMemory,
+    Dynet2RequestChannelLevel,
     Dynet2RequestSerialNumber,
     Dynet2SerialNumberReply,
     Dynet2SignonReply,
@@ -342,6 +344,10 @@ class DynetClient:
     async def query(
         self, request: Dynet2StatusRequest, *, timeout: float = ...
     ) -> PhysicalStateReport: ...
+    @overload
+    async def query(
+        self, request: Dynet2RequestChannelLevel, *, timeout: float = ...
+    ) -> Dynet2ChannelLevelReport: ...
     async def query(self, request: Query, *, timeout: float = 2.0) -> Reply:
         """Send a request and wait for the matching reply.
 
@@ -363,6 +369,8 @@ class DynetClient:
         - `Dynet2StatusRequest` for `StatusQuery.PE_CELL_LIGHT_LEVEL` waits
           for the device's `PhysicalStateReport` of its light level. The
           device's box must fit one byte, as the reply is a DyNet 1 packet.
+        - `Dynet2RequestChannelLevel` waits for the `Dynet2ChannelLevelReport`
+          for the same area and channel.
 
         A request must name one device: a request to all devices has many
         answers, so `subscribe` and `send` it instead. Raises `ValueError`
@@ -516,6 +524,7 @@ type Query = (
     | Dynet2DeviceRequest
     | Dynet2ReadMemory
     | Dynet2StatusRequest
+    | Dynet2RequestChannelLevel
 )
 """Every request `DynetClient.query` can wait for an answer to."""
 
@@ -529,6 +538,7 @@ type Reply = (
     | Dynet2PcbVersionReply
     | Dynet2MemoryData
     | PhysicalStateReport
+    | Dynet2ChannelLevelReport
 )
 """Every reply `DynetClient.query` returns."""
 
@@ -608,6 +618,8 @@ def _answers(request: Query, message: AnyMessage) -> bool:  # noqa: PLR0911
                 message.address,
                 message.selector_raw,
             ) == (request.address, request.selector_raw)
+        case Dynet2RequestChannelLevel(), Dynet2ChannelLevelReport():
+            return (message.area, message.channel) == (request.area, request.channel)
         case Dynet2StatusRequest(), PhysicalStateReport():
             return (
                 _same_device(request, message)

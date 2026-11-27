@@ -14,6 +14,7 @@ from aiodynet import (
     DeviceStatusReport,
     DeviceStatusType,
     Dynet2BuildNumberReply,
+    Dynet2ChannelLevelReport,
     Dynet2Command,
     Dynet2DeviceRequest,
     Dynet2Frame,
@@ -21,6 +22,7 @@ from aiodynet import (
     Dynet2Message,
     Dynet2PcbVersionReply,
     Dynet2ReadMemory,
+    Dynet2RequestChannelLevel,
     Dynet2RequestSerialNumber,
     Dynet2SerialNumberReply,
     Dynet2SignonReply,
@@ -116,8 +118,23 @@ COMMAND_REPLIES: dict[int, list[Dynet2Message]] = {
 }
 
 
+def level(channel: int, percent_level: int) -> Dynet2ChannelLevelReport:
+    return Dynet2ChannelLevelReport(
+        device_code=0x64,
+        box=42,
+        area=8,
+        channel=channel,
+        current_level=percent_level,
+        target_level=percent_level,
+        current_kelvin=3205,
+        target_kelvin=3200,
+    )
+
+
 def frame_replies(frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
     match decode(frame):
+        case Dynet2RequestChannelLevel(channel=channel):
+            return [level(channel + 1, 0), level(channel, 0x7F)]
         case Dynet2RequestSerialNumber():
             return [SERIAL]
         case Dynet2DeviceRequest(command=command):
@@ -243,3 +260,10 @@ async def test_requests_query_cant_wait_for(
     client = DynetClient("127.0.0.1", 1)
     with pytest.raises(ValueError, match=match):
         await client.query(request_)
+
+
+async def test_channel_level_and_temperature(client: DynetClient) -> None:
+    request = Dynet2RequestChannelLevel(
+        source_device_code=0xDA, source_box=1, area=8, channel=1
+    )
+    assert await client.query(request) == level(1, 0x7F)

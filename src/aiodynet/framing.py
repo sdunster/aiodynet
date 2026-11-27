@@ -24,10 +24,11 @@ _SYNC_BYTES = frozenset(SyncType)
 _WAIT: Final = -1
 _NO_MATCH: Final = 0
 
-DEFAULT_MAX_DYNET2_LENGTH: Final = 64
+DEFAULT_MAX_DYNET2_LENGTH: Final = 128
 """The longest DyNet 2 frame `PacketFramer` waits for unless told otherwise.
 
-Every frame seen from real gateways so far has been 20 bytes or less.
+Devices report 128 bytes as their largest packet when they sign on, and
+System Builder's device memory writes use frames of exactly 128 bytes.
 """
 
 

@@ -177,13 +177,23 @@ def test_a_long_length_doesnt_hold_back_packets(
     with caplog.at_level(logging.DEBUG):
         assert list(framer.feed(bytes(raw) + bytes(AREA_20))) == [AREA_20]
     assert framer.pending == 0
-    assert "Not waiting for a 1024-byte DyNet 2 frame (limit 64)" in caplog.text
+    assert "Not waiting for a 1024-byte DyNet 2 frame (limit 128)" in caplog.text
 
 
 def test_ac_noise_before_a_packet() -> None:
-    # 0xAC then 0x1C claims 116 bytes, over the limit, so A comes out at once.
+    # 0xAC then 0x5C claims 372 bytes, over the limit, so it comes out at once.
+    clock = Packet.from_hex("5c aa 55 50 16 45 26")
     framer = PacketFramer()
-    assert list(framer.feed(b"\xac" + bytes(A))) == [A]
+    assert list(framer.feed(b"\xac" + bytes(clock))) == [clock]
+    assert framer.discarded == 1
+
+
+def test_ac_noise_before_a_1c_packet_holds_it_back() -> None:
+    # 0xAC then 0x1C claims 116 bytes, within the limit, so the framer waits
+    # for them, and A only comes out once the checksum there fails.
+    framer = PacketFramer()
+    assert list(framer.feed(b"\xac" + bytes(A))) == []
+    assert list(framer.feed(bytes(B) * 14)) == [A] + [B] * 14
     assert framer.discarded == 1
 
 
@@ -214,8 +224,17 @@ def test_joining_mid_packet_at_an_ac_byte() -> None:
     assert framer.discarded == 7
 
 
+def test_a_128_byte_frame_is_accepted_by_default() -> None:
+    # The size of System Builder's device memory writes.
+    frame = Dynet2Frame.build(bytes(124))
+    assert len(bytes(frame)) == 128
+    framer = PacketFramer()
+    assert list(framer.feed(bytes(frame) + bytes(A))) == [frame, A]
+    assert framer.discarded == 0
+
+
 def test_a_higher_limit_accepts_longer_frames() -> None:
-    long_frame = Dynet2Frame.build(bytes(96))
+    long_frame = Dynet2Frame.build(bytes(196))
     assert list(PacketFramer().feed(bytes(long_frame))) == []
     framer = PacketFramer(max_dynet2_length=1024)
     assert list(framer.feed(bytes(long_frame))) == [long_frame]

@@ -5,6 +5,12 @@
 - `DynetClient.send` also takes DyNet 2 messages (`Dynet2Message`) and raw
   `Dynet2Frame`s. They share the packet queue and pacing. A real gateway
   passes them on to its other clients, and System Builder decodes them.
+- `PacketFramer` now waits for DyNet 2 frames of up to 128 bytes by default,
+  not 64. Devices report 128 bytes as their largest packet, and System
+  Builder's device memory writes use 128-byte frames, which the old limit
+  turned into noise. The cost: a stray 0xAC byte in front of a 0x1C packet
+  now holds packets back until 116 bytes have arrived, where before they came
+  out at once. Pass `max_dynet2_length=64` for the old behaviour.
 - `Dynet2RequestSerialNumber` and `Dynet2SerialNumberReply` type the DyNet 2
   serial number request and reply (type 0x0A), which `decode` used to return
   as `UnknownDynet2Message`. Code that matches exhaustively on

@@ -160,3 +160,33 @@ async def test_replies_can_be_raw_bytes() -> None:
         assert await reader.readexactly(2) == b"\x09\x09"
         writer.close()
         await writer.wait_closed()
+
+
+async def test_frame_replies() -> None:
+    request = Dynet2Frame.from_hex("ac 02 80 da 00 01 b3 00 1d 0f")
+    reply = Dynet2Frame.from_hex("ac 03 81 b3 00 1d da 00 01 0f 0f 00 01 02")
+
+    def frame_replies(frame: Dynet2Frame) -> list[Dynet2Frame]:
+        return [reply] if frame == request else []
+
+    async with FakeGateway(frame_replies=frame_replies) as gateway:
+        reader, writer = await connect(gateway)
+        writer.write(bytes(request) + bytes(Packet.from_hex("1c0100000000ff")))
+        await writer.drain()
+        assert await reader.readexactly(len(reply)) == bytes(reply)
+        await wait_until(lambda: len(gateway.received) == 1)
+        assert gateway.received_frames == [request]
+        writer.close()
+        await writer.wait_closed()
+
+
+async def test_frames_are_recorded_without_frame_replies() -> None:
+    frame = Dynet2Frame.from_hex("ac 02 80 da 00 01 b3 00 1d 0f")
+    async with FakeGateway() as gateway:
+        _, writer = await connect(gateway)
+        writer.write(bytes(frame))
+        await writer.drain()
+        await wait_until(lambda: gateway.received_frames == [frame])
+        assert gateway.received == []
+        writer.close()
+        await writer.wait_closed()

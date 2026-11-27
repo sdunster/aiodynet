@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `FakeGateway(frame_replies=...)` answers DyNet 2 frames that clients send,
+  as `replies` does for packets, and `received_frames` records them.
 - `RequestDeviceStatus` types physical 0x40 Request Device Status for every
   status type except sign-on (still `RequestSignon`). Those packets used to
   decode as `UnknownMessage`. `DeviceStatusType` names the known types:

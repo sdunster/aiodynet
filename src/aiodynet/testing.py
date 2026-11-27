@@ -11,7 +11,8 @@ Use it to test code built on aiodynet without hardware::
 
 It can also answer requests the way a real site would: give it a `replies`
 function that maps each received packet to what to send back: messages,
-packets, frames, or raw bytes (for example noise).
+packets, frames, or raw bytes (for example noise). `frame_replies` does the
+same for DyNet 2 frames clients send.
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ if TYPE_CHECKING:
 type Replies = Callable[
     [Packet], Iterable[Message | Dynet2Message | Packet | Dynet2Frame | bytes]
 ]
+type FrameReplies = Callable[
+    [Dynet2Frame], Iterable[Message | Dynet2Message | Packet | Dynet2Frame | bytes]
+]
 
 
 class FakeGateway:
@@ -44,7 +48,13 @@ class FakeGateway:
     `received` (and the queue behind `next_packet`).
     """
 
-    def __init__(self, *, port: int = 0, replies: Replies | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        port: int = 0,
+        replies: Replies | None = None,
+        frame_replies: FrameReplies | None = None,
+    ) -> None:
         """Create the gateway. It listens once started.
 
         By default it picks a free port; pass `port` to reuse one, for example
@@ -56,7 +66,10 @@ class FakeGateway:
         """Every packet received from any client, in order."""
         self.raw_received = bytearray()
         """Every byte received, unframed."""
+        self.received_frames: list[Dynet2Frame] = []
+        """Every DyNet 2 frame received from any client, in order."""
         self._replies = replies
+        self._frame_replies = frame_replies
         self._queue: asyncio.Queue[Packet] = asyncio.Queue()
         self._writers: list[asyncio.StreamWriter] = []
         self._tasks: set[asyncio.Task[None]] = set()
@@ -157,8 +170,11 @@ class FakeGateway:
             while data := await reader.read(1024):
                 self.raw_received += data
                 for packet in framer.feed(data):
-                    if not isinstance(packet, Packet):
-                        continue  # DyNet 2 frames are only in raw_received
+                    if isinstance(packet, Dynet2Frame):
+                        self.received_frames.append(packet)
+                        if self._frame_replies is not None:
+                            await self.send(*self._frame_replies(packet))
+                        continue
                     self.received.append(packet)
                     self._queue.put_nowait(packet)
                     if self._replies is not None:

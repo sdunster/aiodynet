@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-11-28)
+
+Fixes packets lost when a client closes, types the memory read error, and
+keeps byte 2 of area commands.
 
 - **Fix:** `DynetClient.close` could lose packets sent just before it. It
   closed the socket at once, and the gateway sometimes discarded the last

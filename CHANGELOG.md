@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-27)
 
 - `DynetClient.send` also takes DyNet 2 messages (`Dynet2Message`) and raw
   `Dynet2Frame`s. They share the packet queue and pacing. A real gateway

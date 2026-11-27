@@ -59,6 +59,13 @@
 - `Dynet2FadeLevelTemperature` (0x10) types DyNet 2's "Fade to level and
   Temperature": fade a logical channel to a level and a colour temperature
   in kelvin, as System Builder does for tunable-white fittings.
+- More logical opcodes, each confirmed with one packet System Builder sent
+  and labelled: `LightControlAllPresets` (0x11), `SetJoinLevel` (0x14),
+  `SetAreaLinks` / `ClearAreaLinks` / `AreaLinksReport` /
+  `RequestAreaLinks` (0x20-0x23), `SetRMask` (0x40), `RampToLevelExceptOff`
+  (0x5F) and `SetPresetBank` (0x64). They used to decode as `UnknownMessage`.
+  `ResetPreset`'s docstring now gives System Builder's name for 0x0F,
+  "Recall Previous Preset".
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

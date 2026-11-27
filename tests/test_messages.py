@@ -275,8 +275,6 @@ def test_messages_are_immutable() -> None:
     "raw",
     [
         "5c0102030405ff",  # physical
-        "1c050020000000",  # set area links: bit order undocumented
-        "1c050064000000",  # preset offset: meaning unclear
         "6c000000000000",  # unknown sync byte
     ],
 )

@@ -52,12 +52,14 @@ __all__ = [
     "AreaCascadingSync",
     "AreaCommand",
     "AreaCommandType",
+    "AreaLinksReport",
     "AreaOff",
     "AreaPresetMessage",
     "AreaToLevel",
     "ChannelLevelReport",
     "ChannelOff",
     "ChannelOn",
+    "ClearAreaLinks",
     "ClockDate",
     "ClockTime",
     "DaliTunnelData",
@@ -83,6 +85,7 @@ __all__ = [
     "FadeChannelToPreset",
     "FadeScale",
     "HoldTimerAllPresets",
+    "LightControlAllPresets",
     "LinearPresetSelect",
     "LogicalMessage",
     "Message",
@@ -99,7 +102,9 @@ __all__ = [
     "PresetReport",
     "PresetSelect",
     "ProgramLevelsToPreset",
+    "RampToLevelExceptOff",
     "RawLightLevelReport",
+    "RequestAreaLinks",
     "RequestChannelLevel",
     "RequestDeviceStatus",
     "RequestFirmwareVersion",
@@ -110,8 +115,12 @@ __all__ = [
     "ResetPreset",
     "RestoreSavedPreset",
     "ResumeOccupancyDetection",
+    "SetAreaLinks",
     "SetChannelLevel",
+    "SetJoinLevel",
     "SetPhysicalChannelLevel",
+    "SetPresetBank",
+    "SetRMask",
     "SetUserPreference",
     "StatusQuery",
     "StopFade",
@@ -141,23 +150,32 @@ class Opcode(IntEnum):
     PRESET_7 = 0x0C
     PRESET_8 = 0x0D
     RESET_PRESET = 0x0F
+    LIGHT_CONTROL_ALL_PRESETS = 0x11
+    SET_JOIN_LEVEL = 0x14
     DISABLE_PANELS = 0x15
     ENABLE_PANELS = 0x16
     PANIC = 0x17
     UNPANIC = 0x18
+    SET_AREA_LINKS = 0x20
+    CLEAR_AREA_LINKS = 0x21
+    REPORT_AREA_LINKS = 0x22
+    REQUEST_AREA_LINKS = 0x23
     MOTION_ACTIVITY_SYNC = 0x2E
     AREA_CASCADING_SYNC = 0x2F
     HOLD_TIMER_ALL_PRESETS = 0x30
     OCCUPANCY_DETECTION_ALL_PRESETS = 0x31
     SUSPEND_OCCUPANCY_DETECTION = 0x3A
     RESUME_OCCUPANCY_DETECTION = 0x3B
+    SET_RMASK = 0x40
     SET_USER_PREFERENCE = 0x48
     REQUEST_USER_PREFERENCE = 0x49
     REPORT_USER_PREFERENCE = 0x4A
     REPORT_CHANNEL_LEVEL = 0x60
     REQUEST_CHANNEL_LEVEL = 0x61
+    RAMP_TO_LEVEL_EXCEPT_OFF = 0x5F
     REPORT_PRESET = 0x62
     REQUEST_PRESET = 0x63
+    SET_PRESET_BANK = 0x64
     LINEAR_PRESET = 0x65
     SAVE_CURRENT_PRESET = 0x66
     RESTORE_SAVED_PRESET = 0x67
@@ -745,7 +763,12 @@ class AreaOff(_AreaFadeMessage):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResetPreset(_AreaFadeMessage):
-    """Fade an area back to the levels of its current preset (opcode 0x0F)."""
+    """Recall an area's previous preset (opcode 0x0F).
+
+    System Builder labels ``1c 08 00 0f 00 00`` "Recall Previous Preset with a
+    fade of 0.00s". (The class name comes from an earlier reading of the
+    opcode list, "reset preset", and is kept for compatibility.)
+    """
 
     opcode: ClassVar[int] = Opcode.RESET_PRESET
     opcodes: ClassVar[tuple[int, ...]] = (Opcode.RESET_PRESET,)
@@ -1212,15 +1235,14 @@ class AreaCascadingSync(LogicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class OccupancyDetectionAllPresets(LogicalMessage):
-    """Suspend or resume occupancy detection for every preset (opcode 0x31).
+class _ResumeAllPresets(LogicalMessage):
+    """Suspend or resume a feature for every preset (byte 5: 1 resume, 0 suspend).
 
-    Byte 5 is 0x01 to resume and 0x00 to suspend, confirmed with the official
-    DyNet network monitor. A packet with any other value there decodes as
-    `UnknownMessage`. Byte 4 is unused.
+    A packet with any other value in byte 5 decodes as `UnknownMessage`.
+    Byte 4 is unused.
     """
 
-    opcodes: ClassVar[tuple[int, ...]] = (Opcode.OCCUPANCY_DETECTION_ALL_PRESETS,)
+    opcode: ClassVar[int]
 
     channel: int | None = None
     """The channel, numbered from 1, or ``None`` for every channel (all real
@@ -1241,10 +1263,7 @@ class OccupancyDetectionAllPresets(LogicalMessage):
     @override
     def to_packet(self) -> Packet:
         return self._packet(
-            _channel_to_wire(self.channel),
-            Opcode.OCCUPANCY_DETECTION_ALL_PRESETS,
-            0,
-            int(self.resume),
+            _channel_to_wire(self.channel), self.opcode, 0, int(self.resume)
         )
 
     @override
@@ -1258,6 +1277,233 @@ class OccupancyDetectionAllPresets(LogicalMessage):
             area=area,
             channel=_channel_from_wire(channel),
             resume=state == 1,
+            join=join,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OccupancyDetectionAllPresets(_ResumeAllPresets):
+    """Suspend or resume occupancy detection for every preset (opcode 0x31).
+
+    Byte 5 is 0x01 to resume and 0x00 to suspend, confirmed with the official
+    DyNet network monitor. A packet with any other value there decodes as
+    `UnknownMessage`. Byte 4 is unused.
+    """
+
+    opcode: ClassVar[int] = Opcode.OCCUPANCY_DETECTION_ALL_PRESETS
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.OCCUPANCY_DETECTION_ALL_PRESETS,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LightControlAllPresets(_ResumeAllPresets):
+    """Suspend or resume light level control for every preset (opcode 0x11).
+
+    The opcode list calls it "Light Level Compensation Enable / Disable All
+    Presets". System Builder shows ``1c 08 ff 11 00 01`` as "Resume Light
+    Control for all Presets" and byte 5 = 0x00 as "Suspend".
+    """
+
+    opcode: ClassVar[int] = Opcode.LIGHT_CONTROL_ALL_PRESETS
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.LIGHT_CONTROL_ALL_PRESETS,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _AreaByteMessage(LogicalMessage):
+    """A logical message with one data byte in byte 2; bytes 4-5 unused."""
+
+    opcode: ClassVar[int]
+    field_name: ClassVar[str]
+
+    def _value(self) -> int:
+        value: int = getattr(self, self.field_name)
+        return value
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int(self.field_name, self._value(), 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(self._value(), self.opcode, 0, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, value, _, _, _, join = packet.data
+        return cls(area=area, join=join, **{cls.field_name: value})
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SetPresetBank(_AreaByteMessage):
+    """Set an area's preset bank (opcode 0x64, "Preset Offset / Set Bank").
+
+    System Builder shows ``1c 08 00 64 00 00`` as "Set Bank to 0". Banks
+    group presets in eights, as in `PresetSelect`'s bank byte.
+    """
+
+    opcode: ClassVar[int] = Opcode.SET_PRESET_BANK
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.SET_PRESET_BANK,)
+    field_name: ClassVar[str] = "bank"
+
+    bank: int
+    """The bank, 0-255, as sent."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SetRMask(_AreaByteMessage):
+    """Set an area's RMask (opcode 0x40).
+
+    System Builder shows ``1c 08 00 40 00 00`` as "Set Rmask 0x00". What the
+    mask selects isn't documented in the opcode list.
+    """
+
+    opcode: ClassVar[int] = Opcode.SET_RMASK
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.SET_RMASK,)
+    field_name: ClassVar[str] = "mask"
+
+    mask: int
+    """The mask byte."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SetJoinLevel(_AreaByteMessage):
+    """Set the join level in smart panels (opcode 0x14).
+
+    System Builder shows ``1c 08 00 14 00 00`` as "Set Join Level 0".
+    """
+
+    opcode: ClassVar[int] = Opcode.SET_JOIN_LEVEL
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.SET_JOIN_LEVEL,)
+    field_name: ClassVar[str] = "join_level"
+
+    join_level: int
+    """The join level byte."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _AreaLinksMessage(LogicalMessage):
+    """Area link bits: bits 1-8 in byte 2, 9-16 in byte 4, 17-24 in byte 5."""
+
+    opcode: ClassVar[int]
+
+    bits: int
+    """The 24 link bits, 0-0xFFFFFF. Bit 0 is link 1, as the opcode list
+    numbers them ("Area Bits 1-8" in byte 2)."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_int("bits", self.bits, 0, 0xFFFFFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            self.bits & 0xFF, self.opcode, self.bits >> 8 & 0xFF, self.bits >> 16
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, low, _, middle, high, join = packet.data
+        return cls(area=area, bits=low | middle << 8 | high << 16, join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SetAreaLinks(_AreaLinksMessage):
+    """Set area link bits (opcode 0x20).
+
+    System Builder shows ``1c 08 ff 20 ff ff`` as "Set Area Links Bits
+    0xFFFFFF". Which link each bit stands for depends on the site's base
+    link area, so the bits are kept as one number.
+    """
+
+    opcode: ClassVar[int] = Opcode.SET_AREA_LINKS
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.SET_AREA_LINKS,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ClearAreaLinks(_AreaLinksMessage):
+    """Clear area link bits (opcode 0x21, "Clear Area Link Bits")."""
+
+    opcode: ClassVar[int] = Opcode.CLEAR_AREA_LINKS
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.CLEAR_AREA_LINKS,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AreaLinksReport(_AreaLinksMessage):
+    """An area's link bits (opcode 0x22, "Reply Area Link Bits").
+
+    The answer to `RequestAreaLinks`. Two devices answered one request for
+    area 8 at one site, both with no links.
+    """
+
+    opcode: ClassVar[int] = Opcode.REPORT_AREA_LINKS
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.REPORT_AREA_LINKS,)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RequestAreaLinks(LogicalMessage):
+    """Ask an area for its link bits (opcode 0x23); answered by `AreaLinksReport`."""
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.REQUEST_AREA_LINKS,)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(0, Opcode.REQUEST_AREA_LINKS, 0, 0)
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, _, _, _, _, join = packet.data
+        return cls(area=area, join=join)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RampToLevelExceptOff(LogicalMessage):
+    """Ramp channels to a level, leaving out channels at 0 % (opcode 0x5F).
+
+    The opcode list calls it "Ramp Channel / Area to Level Except for
+    Channels at 0% or Don't Care". System Builder shows
+    ``1c 08 ff 5f 00 00`` as "Ramp Channels toward Exclude with a ramp rate of
+    0.00s", channel "All". Only that packet has been seen, so the level and
+    ramp rate are kept raw.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (Opcode.RAMP_TO_LEVEL_EXCEPT_OFF,)
+
+    channel: int | None = None
+    """The channel, numbered from 1, or ``None`` for every channel."""
+    level_raw: int = 0
+    """Byte 4, the level."""
+    ramp_raw: int = 0
+    """Byte 5, the ramp rate (0 was shown as 0.00 s)."""
+
+    @override
+    def __post_init__(self) -> None:
+        LogicalMessage.__post_init__(self)
+        _check_channel_or_all(self.channel)
+        _check_int("level_raw", self.level_raw, 0, 0xFF)
+        _check_int("ramp_raw", self.ramp_raw, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            _channel_to_wire(self.channel),
+            Opcode.RAMP_TO_LEVEL_EXCEPT_OFF,
+            self.level_raw,
+            self.ramp_raw,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, area, channel, _, level, ramp, join = packet.data
+        return cls(
+            area=area,
+            channel=_channel_from_wire(channel),
+            level_raw=level,
+            ramp_raw=ramp,
             join=join,
         )
 
@@ -3347,6 +3593,15 @@ type AnyDynet1Message = (
     | ResumeOccupancyDetection
     | HoldTimerAllPresets
     | OccupancyDetectionAllPresets
+    | LightControlAllPresets
+    | SetPresetBank
+    | SetRMask
+    | SetJoinLevel
+    | SetAreaLinks
+    | ClearAreaLinks
+    | AreaLinksReport
+    | RequestAreaLinks
+    | RampToLevelExceptOff
     | AreaCascadingSync
     | ClockTime
     | ClockDate
@@ -3414,6 +3669,15 @@ _LOGICAL_TYPES: tuple[type[LogicalMessage], ...] = (
     PresetLevelReport,
     AreaCascadingSync,
     OccupancyDetectionAllPresets,
+    LightControlAllPresets,
+    SetPresetBank,
+    SetRMask,
+    SetJoinLevel,
+    SetAreaLinks,
+    ClearAreaLinks,
+    AreaLinksReport,
+    RequestAreaLinks,
+    RampToLevelExceptOff,
     HoldTimerAllPresets,
     SuspendOccupancyDetection,
     ResumeOccupancyDetection,

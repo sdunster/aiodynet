@@ -139,7 +139,7 @@ in the DyNet tools and on keypads.
 | `RequestChannelLevel` | 0x61 | Ask a channel for its level |
 | `FadeChannelToPreset` | 0x6B | Fade one channel, or every channel, to a preset's level |
 | `AreaCommand` | 0x05, 0x06, 0x08, 0x15, 0x16, 0x66 | Area commands with no data: step the area level down or up, program the current preset, disable or enable panels, save the current preset (`AreaCommandType`) |
-| `AreaOff`, `ResetPreset`, `Panic`, `Unpanic` | 0x04, 0x0F, 0x17, 0x18 | Area commands with a preset-style fade |
+| `AreaOff`, `ResetPreset`, `Panic`, `Unpanic` | 0x04, 0x0F, 0x17, 0x18 | Area commands with a preset-style fade. System Builder calls 0x0F "Recall Previous Preset", 0x17 "Disable Panels and recall Panic Preset" and 0x18 "Enable Panels and recall Previous Preset" |
 | `AreaToLevel` | 0x79 | Fade every channel in an area to one level |
 | `ChannelOff`, `ChannelOn` | 0x74, 0x75 | Fade a channel, or every channel, to off or full |
 | `StopFade` | 0x76 | Stop a channel, or every channel, mid-fade |
@@ -149,6 +149,10 @@ in the DyNet tools and on keypads.
 | `MotionActivitySync` | 0x2E | A motion sensor sharing its activity timer |
 | `AreaCascadingSync` | 0x2F | An area's cascading timer keeping linked areas in step |
 | `HoldTimerAllPresets` | 0x30 | Suspend or resume the hold timer for every preset (state kept raw) |
+| `LightControlAllPresets` | 0x11 | Suspend or resume light level control for every preset |
+| `SetPresetBank`, `SetRMask`, `SetJoinLevel` | 0x64, 0x40, 0x14 | Set an area's preset bank, RMask, or smart panels' join level |
+| `SetAreaLinks`, `ClearAreaLinks`, `RequestAreaLinks`, `AreaLinksReport` | 0x20–0x23 | Set, clear, ask for and report an area's 24 link bits |
+| `RampToLevelExceptOff` | 0x5F | Ramp channels to a level, leaving out channels at 0 % (level and ramp rate kept raw) |
 | `OccupancyDetectionAllPresets` | 0x31 | Suspend or resume occupancy detection for every preset |
 | `SuspendOccupancyDetection`, `ResumeOccupancyDetection` | 0x3A, 0x3B | The same for the current preset only |
 | `SetUserPreference`, `RequestUserPreference`, `UserPreferenceReport` | 0x48–0x4A | Device-specific 16-bit preference values. For preference 0x0C, `UserPreferenceReport.temperature` gives °C |
@@ -167,8 +171,9 @@ in the DyNet tools and on keypads.
 Where an opcode can address one channel or the whole area, `channel=None`
 means every channel. Fields whose unit the opcode list doesn't pin down are
 kept raw and named `*_raw` (for example `fade_raw`, `time_raw`), rather than
-guessed. Area links (0x20–0x23) are left undecoded because the opcode list
-doesn't say which bit is which area.
+guessed. Area links (0x20–0x23) keep their 24 link bits as one number,
+`bits`, in the opcode list's order (bits 1–8 in byte 2): which area each bit
+links depends on the site.
 
 `PresetSelect`, `LinearPresetSelect` and `PresetReport` share the base class
 `AreaPresetMessage`, so `isinstance(message, AreaPresetMessage)` catches "this
@@ -291,6 +296,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | All other extended messages | Byte layout from the opcode list only |
 | `AreaCascadingSync`, `OccupancyDetectionAllPresets` (0x01 = resume), `DeviceIdentify` (version as hex digits), `DeviceStatusReport`, `UserPreferenceReport.temperature` (whole degrees + hundredths) | Opcode list, plus real packets decoded by the official DyNet network monitor. Negative temperatures haven't been seen, so they come back as `None` |
 | `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset` | Opcode list only |
+| `LightControlAllPresets`, `SetPresetBank`, `SetRMask`, `SetJoinLevel`, area links, `RampToLevelExceptOff` | Opcode list, plus one packet of each sent by System Builder at one site with its label (for example "Resume Light Control for all Presets" for byte 5 = 1, "Set Area Links Bits 0xFFFFFF"). The link bit order is the opcode list's; only all-ones and all-zeros were seen |
 | `RequestDeviceStatus` (0x16), `DeviceStatusReport.application_running`, `DeviceIdentify.after_reset` | Packets sent to and from D5Sen sensors at one site, labelled by System Builder: "Bootloader running Reason" and its answer "This is not the bootloader, this is the application" (0x55); boot byte 0x80 as "Device Reset" |
 | `SetPhysicalChannelLevel` | Packets System Builder sent to flash a relay channel and a DALI channel at one site, labelled "Set Physical Channel Level (Channel 3, Level 100%, Fade 0.00s)" for level 0xFE. Only levels 0 and 0xFE and fade 0 have been seen; `percent` assumes a linear scale |
 | `RawLightLevelReport` | D5Sen replies to raw light level polls, labelled "Light Level Request, Filtered raw illuminance value (Level: 0x01)". Only levels up to 0x10 seen, so the high byte is assumed |

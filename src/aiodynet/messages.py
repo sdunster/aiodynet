@@ -43,6 +43,8 @@ __all__ = [
     "APPLICATION_RUNNING",
     "DEVICE_RESET",
     "DYNET2_ALL_DEVICES",
+    "MAIN_EEPROM",
+    "MAX_MEMORY_CHUNK",
     "PHYSICAL_LEVEL_FULL",
     "AnyDynet1Message",
     "AnyDynet2Message",
@@ -64,9 +66,13 @@ __all__ = [
     "Dynet2BuildNumberReply",
     "Dynet2Command",
     "Dynet2DeviceRequest",
+    "Dynet2MemoryData",
     "Dynet2Message",
     "Dynet2PcbVersionReply",
+    "Dynet2ReadMemory",
     "Dynet2SignonReply",
+    "Dynet2WriteMemory",
+    "Dynet2WriteMemoryAck",
     "FadeChannelToLevel",
     "FadeChannelToPreset",
     "FadeScale",
@@ -1855,6 +1861,23 @@ _DEVICE_REQUEST_LENGTH = 12
 _SHORT_REPLY_LENGTH = 16
 _BUILD_REPLY_CODE = 0x06
 _PCB_REPLY_CODE = 0x0F
+_READ_MEMORY = 0x9A
+_MEMORY_DATA = 0x9B
+_WRITE_MEMORY = 0x9C
+_WRITE_MEMORY_ACK = 0x9D
+_MEMORY_HEADER_LENGTH = 13
+"""Body bytes before a memory frame's data: type, two addresses, selector,
+start address and length."""
+_MEMORY_REQUEST_LENGTH = 20
+
+MAX_MEMORY_CHUNK: Final = 111
+"""The most data bytes one memory read or write carries to a device whose
+largest packet is 128 bytes. System Builder reads and writes in chunks of at
+most this size."""
+
+MAIN_EEPROM: Final = b"\x00\x00"
+"""The memory selector System Builder shows as "main device, memory type
+EEPROM"."""
 _SIGNON_REPLY_LENGTH = 20
 _SIGNON_EXTENSION_LENGTH = 24
 _SIGNON_IPV6 = slice(5, 21)
@@ -2410,6 +2433,258 @@ class Dynet2PcbVersionReply(Dynet2Message):
         )
 
 
+def _pad(body: bytes) -> bytes:
+    return body + bytes(-len(body) % 4)
+
+
+def _check_memory(message: object) -> None:
+    _check_raw("selector_raw", getattr(message, "selector_raw"), 2)  # noqa: B009
+    _check_int("address", getattr(message, "address"), 0, 0xFFFF)  # noqa: B009
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2ReadMemory(Dynet2Message):
+    """Ask a device for bytes of its memory (DyNet 2 type 0x9A).
+
+    Layout::
+
+        ac 04 | 9a | source: dev box box | target: dev box box | selector (2)
+              | start address (2) | length (2) | 00 00 00 | C2 C1
+
+    System Builder shows ``00 00 | 00 1a | 00 05`` as "Request Read Data from
+    Device Memory - Main device, memory type EEPROM, start address 0x1a,
+    data length 5". The device answers with a `Dynet2MemoryData`. Reading
+    changes nothing. Ask for at most `MAX_MEMORY_CHUNK` bytes, so the reply
+    fits a 128-byte frame.
+    """
+
+    device_code: int
+    """The device to read from."""
+    box: int
+    source_device_code: int
+    """Who is asking; the reply is addressed here."""
+    source_box: int
+    address: int
+    """The first byte to read, 0-65535."""
+    length: int
+    """How many bytes, 0-65535."""
+    selector_raw: bytes = MAIN_EEPROM
+    """Bytes 9-10: which device and memory. `MAIN_EEPROM` is the main
+    device's EEPROM; ``02 00`` has been seen once, meaning unknown."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "source_")
+        _check_memory(self)
+        _check_int("length", self.length, 0, 0xFFFF)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a memory read request. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _MEMORY_REQUEST_LENGTH
+            and body[0] == _READ_MEMORY
+            and body[_MEMORY_HEADER_LENGTH:] == bytes(3)
+        ):
+            msg = f"Not a DyNet 2 memory read request: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            source_device_code=body[1],
+            source_box=int.from_bytes(body[2:4]),
+            device_code=body[4],
+            box=int.from_bytes(body[5:7]),
+            selector_raw=body[7:9],
+            address=int.from_bytes(body[9:11]),
+            length=int.from_bytes(body[11:13]),
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            _pad(
+                bytes((_READ_MEMORY,))
+                + _address(self.source_device_code, self.source_box)
+                + _address(self.device_code, self.box)
+                + self.selector_raw
+                + self.address.to_bytes(2)
+                + self.length.to_bytes(2)
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _MemoryData(Dynet2Message):
+    """Shared layout of a memory read reply and a memory write."""
+
+    frame_type: ClassVar[int]
+
+    device_code: int
+    box: int
+    target_device_code: int
+    target_box: int
+    address: int
+    """The first byte, 0-65535."""
+    data: bytes
+    """The bytes, starting at `address`."""
+    selector_raw: bytes = MAIN_EEPROM
+    """Bytes 9-10: which device and memory (see `Dynet2ReadMemory`)."""
+    trailer_raw: bytes = b""
+    """Bytes after the data, if they aren't the zero padding that brings the
+    frame to a multiple of four bytes. System Builder shows a reply with only
+    that padding as "no error"."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "target_")
+        _check_memory(self)
+        for name in ("data", "trailer_raw"):
+            if not isinstance(getattr(self, name), bytes):
+                msg = f"{name} must be bytes, not {type(getattr(self, name)).__name__}"
+                raise TypeError(msg)
+        if len(self.data) > 0xFFFF:
+            msg = f"data must be at most 65535 bytes, got {len(self.data)}"
+            raise ValueError(msg)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read this kind of frame. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        end = _MEMORY_HEADER_LENGTH + int.from_bytes(body[11:13])
+        if not (
+            len(body) >= _MEMORY_HEADER_LENGTH
+            and body[0] == cls.frame_type
+            and end <= len(body)
+        ):
+            msg = f"Not a DyNet 2 {cls.__name__}: {frame.hex()}"
+            raise ValueError(msg)
+        trailer = body[end:]
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            selector_raw=body[7:9],
+            address=int.from_bytes(body[9:11]),
+            data=body[_MEMORY_HEADER_LENGTH:end],
+            trailer_raw=b"" if trailer == bytes(-end % 4) else trailer,
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            _pad(
+                bytes((self.frame_type,))
+                + _address(self.device_code, self.box)
+                + _address(self.target_device_code, self.target_box)
+                + self.selector_raw
+                + self.address.to_bytes(2)
+                + len(self.data).to_bytes(2)
+                + self.data
+                + self.trailer_raw
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2MemoryData(_MemoryData):
+    """Bytes of a device's memory, the answer to `Dynet2ReadMemory` (type 0x9B).
+
+    Layout::
+
+        ac nn | 9b | source: dev box box | target: dev box box | selector (2)
+              | start address (2) | length (2) | data | zero padding | C2 C1
+
+    `device_code` and `box` are the device the memory belongs to; the target
+    is whoever asked. System Builder shows a reply to the read in
+    `Dynet2ReadMemory` as "... data length 5, no error". Blank (never
+    written) EEPROM reads as 0xFF.
+    """
+
+    frame_type: ClassVar[int] = _MEMORY_DATA
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2WriteMemory(_MemoryData):
+    """Write bytes to a device's memory (DyNet 2 type 0x9C).
+
+    The same layout as `Dynet2MemoryData`, with `device_code` and `box` the
+    **sender** and the target the device being written. The device answers
+    with a `Dynet2WriteMemoryAck`. System Builder writes in chunks of at most
+    `MAX_MEMORY_CHUNK` bytes, after a `SILENCE` command, and resets the
+    device afterwards. This changes the device's configuration: don't send
+    it without knowing what the bytes mean.
+    """
+
+    frame_type: ClassVar[int] = _WRITE_MEMORY
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2WriteMemoryAck(Dynet2Message):
+    """A device acknowledging a `Dynet2WriteMemory` (type 0x9D).
+
+    Layout::
+
+        ac 04 | 9d | source: dev box box | target: dev box box | selector (2)
+              | start address (2) | result (2) | 00 00 00 | C2 C1
+
+    The two bytes where the length would be were 00 00 after every write
+    seen (all of them succeeded), so they are kept raw.
+    """
+
+    device_code: int
+    """The device that was written."""
+    box: int
+    target_device_code: int
+    """Who wrote it."""
+    target_box: int
+    address: int
+    """The start address of the write, 0-65535."""
+    selector_raw: bytes = MAIN_EEPROM
+    result_raw: bytes = b"\x00\x00"
+    """Bytes 13-14; 00 00 after a successful write."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "target_")
+        _check_memory(self)
+        _check_raw("result_raw", self.result_raw, 2)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a write acknowledgement. Raises `ValueError` if it isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _MEMORY_REQUEST_LENGTH
+            and body[0] == _WRITE_MEMORY_ACK
+            and body[_MEMORY_HEADER_LENGTH:] == bytes(3)
+        ):
+            msg = f"Not a DyNet 2 memory write acknowledgement: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            selector_raw=body[7:9],
+            address=int.from_bytes(body[9:11]),
+            result_raw=body[11:13],
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            _pad(
+                bytes((_WRITE_MEMORY_ACK,))
+                + _address(self.device_code, self.box)
+                + _address(self.target_device_code, self.target_box)
+                + self.selector_raw
+                + self.address.to_bytes(2)
+                + self.result_raw
+            )
+        )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownDynet2Message(Dynet2Message):
     """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
@@ -2476,6 +2751,10 @@ type AnyDynet2Message = (
     | Dynet2DeviceRequest
     | Dynet2BuildNumberReply
     | Dynet2PcbVersionReply
+    | Dynet2ReadMemory
+    | Dynet2MemoryData
+    | Dynet2WriteMemory
+    | Dynet2WriteMemoryAck
     | UnknownDynet2Message
 )
 """Every message `decode` can return for a `Dynet2Frame`."""
@@ -2539,6 +2818,10 @@ _DYNET2_TYPES: tuple[_Dynet2Decoder, ...] = (
     Dynet2DeviceRequest.from_frame,
     Dynet2BuildNumberReply.from_frame,
     Dynet2PcbVersionReply.from_frame,
+    Dynet2ReadMemory.from_frame,
+    Dynet2MemoryData.from_frame,
+    Dynet2WriteMemory.from_frame,
+    Dynet2WriteMemoryAck.from_frame,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

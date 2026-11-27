@@ -24,6 +24,12 @@
   and `Dynet2SignonReply.bootloader` marks the bootloader's sign-on (byte 9
   = 0x02), which used to decode as `UnknownDynet2Message`. Code that matches
   exhaustively on `AnyDynet2Message` needs cases for the new classes.
+- Device memory over DyNet 2: `Dynet2ReadMemory` (0x9A) asks for bytes,
+  `Dynet2MemoryData` (0x9B) carries them, `Dynet2WriteMemory` (0x9C) writes
+  and `Dynet2WriteMemoryAck` (0x9D) acknowledges. `MAIN_EEPROM` is the
+  selector System Builder calls "main device, memory type EEPROM", and
+  `MAX_MEMORY_CHUNK` (111) is the most data that fits a 128-byte frame.
+  These frames used to decode as `UnknownDynet2Message`.
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

@@ -2045,15 +2045,22 @@ _DYNET2_TYPES: tuple[
 ] = (Dynet2SignonReply, Dynet2RequestSerialNumber, Dynet2SerialNumberReply)
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]
-_DECODERS: dict[tuple[int, int], _Decoder] = {}
+_DECODERS: dict[tuple[int, int], list[_Decoder]] = {}
+"""The decoders for each (sync, opcode), tried in order. An opcode can carry
+more than one message, told apart by its data bytes (physical 0x40 is both
+`RequestSignon` and other device status requests)."""
 for _type in _LOGICAL_TYPES:
     for _opcode in _type.opcodes:
         # Every concrete class is a member of AnyMessage; mypy can't see that
         # through the base-class tuple.
-        _DECODERS[SyncType.LOGICAL, _opcode] = cast("_Decoder", _type.from_packet)
+        _DECODERS.setdefault((SyncType.LOGICAL, _opcode), []).append(
+            cast("_Decoder", _type.from_packet)
+        )
 for _ptype in _PHYSICAL_TYPES:
     for _opcode in _ptype.opcodes:
-        _DECODERS[SyncType.PHYSICAL, _opcode] = cast("_Decoder", _ptype.from_packet)
+        _DECODERS.setdefault((SyncType.PHYSICAL, _opcode), []).append(
+            cast("_Decoder", _ptype.from_packet)
+        )
 
 
 @overload
@@ -2076,8 +2083,7 @@ def decode(raw: Packet | Dynet2Frame) -> AnyMessage:
                 pass
         return UnknownDynet2Message(frame=raw)
     packet = raw
-    decoder = _DECODERS.get((packet.sync, packet.data[3]))
-    if decoder is not None:
+    for decoder in _DECODERS.get((packet.sync, packet.data[3]), ()):
         try:
             return decoder(packet)
         except ValueError:

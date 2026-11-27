@@ -30,6 +30,11 @@
   selector System Builder calls "main device, memory type EEPROM", and
   `MAX_MEMORY_CHUNK` (111) is the most data that fits a 128-byte frame.
   These frames used to decode as `UnknownDynet2Message`.
+- `Dynet2StatusRequest` types DyNet 2 status polls (0x82), with
+  `StatusQuery` naming the light level (answered by a
+  `PhysicalStateReport`), the raw light level, the motion power level and
+  "Who are you". **The gateway's greeting now decodes as a
+  `Dynet2StatusRequest`** for `WHO_ARE_YOU`, not as `UnknownDynet2Message`.
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

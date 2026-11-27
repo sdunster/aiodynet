@@ -95,12 +95,16 @@ the order they arrived, `DynetClient.subscribe` callbacks get both, and
 | `Dynet2PcbVersionReply` | reply (0x81), type 0x0F | The circuit board's version and revision |
 | `Dynet2ReadMemory`, `Dynet2MemoryData` | 0x9A, 0x9B | Read bytes of a device's memory (EEPROM), at most `MAX_MEMORY_CHUNK` at a time |
 | `Dynet2WriteMemory`, `Dynet2WriteMemoryAck` | 0x9C, 0x9D | Write bytes of a device's memory. This changes its configuration |
+| `Dynet2StatusRequest` | 0x82 | Ask a device for a `StatusQuery`, such as a D5Sen's light level (answered by a `PhysicalStateReport`). The gateway's greeting is a "Who are you" request |
 | `UnknownDynet2Message` | anything else | Passed through unchanged, frame included |
 
 `send` takes DyNet 2 messages and raw `Dynet2Frame`s as well. A real gateway
-passes a frame from one client on to its other clients, and answers some
-itself: it replies to its own "Request Who are you" (type 0x0C), for example.
-Whether it also puts client frames on the RS-485 bus hasn't been checked.
+passes most frames from one client on to its other clients and to the
+devices, which answer them. It answers some itself: "Who are you"
+(`StatusQuery.WHO_ARE_YOU`) gets a 0x83 frame back on the asking connection
+only, and no other client sees either. It turns System Builder's DyNet 2
+"Fade Physical Channel Level" into a physical 0x92 `SetPhysicalChannelLevel`
+for everyone else.
 
 ```python
 await client.send(
@@ -284,6 +288,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `Dynet2RequestSerialNumber`, `Dynet2SerialNumberReply` | Requests from System Builder and the replies to them, captured at one site. The serial numbers in 44 replies were checked against that site's System Builder job: 42 matched, and the other two devices had been replaced since the job was last updated. Byte 10 of the reply and its three trailing zero bytes are kept raw |
 | `Dynet2DeviceRequest`, `Dynet2BuildNumberReply`, `Dynet2PcbVersionReply`, `Dynet2SignonReply.bootloader` | Each command sent to a D5Sen (and silence / go back to work to an Antumbra panel) at one site, from System Builder's address, with System Builder labelling the requests and replies. The PCB version matched System Builder's job. Reset and silence were captured from System Builder itself. The build number's byte order is assumed (only build 1 seen) |
 | `Dynet2ReadMemory`, `Dynet2MemoryData`, `Dynet2WriteMemory`, `Dynet2WriteMemoryAck` | System Builder reading and writing two D5Sens' configuration at one site, with its labels for the read ("Main device, memory type EEPROM, start address 0x1a, data length 5", "no error"). A read sent by aiodynet got the expected reply. The write layout and acknowledgement are inferred from System Builder's writes, which matched the change made in its user interface. Selector 02 00 was seen once, meaning unknown |
+| `Dynet2StatusRequest`, `StatusQuery` | System Builder's polls of two D5Sens at one site, with its labels, and polls sent from aiodynet's side: the PE cell light-level poll got the `PhysicalStateReport` System Builder showed as the lux reading. The motion power-level poll never got an answer. "Who are you" was sent with four address variants; only the gateway answered |
 | DyNet 2 framing: `0xAC`, length, Fletcher-16 mod 256 trailer | Three frames captured from a real gateway; all three verify and end exactly where the next DyNet 1 packet starts. Recheck the checksum on any new kind of frame |
 
 The `dynalite-devices` comparison was made black-box: by driving its public

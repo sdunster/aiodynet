@@ -210,8 +210,8 @@ async def test_partial_packets_and_noise(
     assert seen[0].message == PresetSelect(area=1, preset=1)
 
 
-GREETING = Dynet2Frame.from_hex(
-    "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+WHO_REPLY = Dynet2Frame.from_hex(  # a gateway's 0x83 answer: no typed message
+    "ac 04 83 dc 00 5a dc 00 5a 00 00 0d 00 00 00 00 00 00 31 ac"
 )
 D5SEN = Dynet2SignonReply(
     device_code=0xB3,
@@ -232,15 +232,15 @@ async def test_dynet2_frames_reach_subscribers_in_order(
     await client.connect()
     await gateway.wait_for_client()
 
-    await gateway.send(GREETING, PresetSelect(area=1, preset=1), D5SEN)
+    await gateway.send(WHO_REPLY, PresetSelect(area=1, preset=1), D5SEN)
     await until(lambda: len(seen) == 3)
     assert [r.raw for r in seen] == [
-        GREETING,
+        WHO_REPLY,
         PresetSelect(area=1, preset=1).to_packet(),
         D5SEN.to_frame(),
     ]
     assert [r.message for r in seen] == [
-        UnknownDynet2Message(frame=GREETING),
+        UnknownDynet2Message(frame=WHO_REPLY),
         PresetSelect(area=1, preset=1),
         D5SEN,
     ]

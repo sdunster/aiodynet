@@ -71,6 +71,7 @@ __all__ = [
     "Dynet2PcbVersionReply",
     "Dynet2ReadMemory",
     "Dynet2SignonReply",
+    "Dynet2StatusRequest",
     "Dynet2WriteMemory",
     "Dynet2WriteMemoryAck",
     "FadeChannelToLevel",
@@ -105,6 +106,7 @@ __all__ = [
     "SetChannelLevel",
     "SetPhysicalChannelLevel",
     "SetUserPreference",
+    "StatusQuery",
     "StopFade",
     "SuspendOccupancyDetection",
     "UnknownDynet2Message",
@@ -1869,6 +1871,8 @@ _MEMORY_HEADER_LENGTH = 13
 """Body bytes before a memory frame's data: type, two addresses, selector,
 start address and length."""
 _MEMORY_REQUEST_LENGTH = 20
+_STATUS_REQUEST = 0x82
+_STATUS_REQUEST_LENGTH = 20
 
 MAX_MEMORY_CHUNK: Final = 111
 """The most data bytes one memory read or write carries to a device whose
@@ -2685,11 +2689,103 @@ class Dynet2WriteMemoryAck(Dynet2Message):
         )
 
 
+class StatusQuery(IntEnum):
+    """What a `Dynet2StatusRequest` asks for: bytes 9-10, as one 16-bit value.
+
+    The high byte picks the function (0x04 PE cell, 0x05 motion detector),
+    the low byte what to report. Names follow System Builder.
+    """
+
+    WHO_ARE_YOU = 0x000C
+    """"Request Who are you". Gateways send it to all devices a few times
+    after each new connection, and answer it themselves when a client sends
+    it, with a 0x83 frame to that client only (not typed)."""
+    PE_CELL_RAW_LIGHT_LEVEL = 0x0401
+    """"PE Cell status - Filtered Raw LL". A D5Sen answers with a physical
+    0x0A packet (not typed: its label wasn't checked)."""
+    PE_CELL_LIGHT_LEVEL = 0x0403
+    """"PE Cell status - filtered LL, user cal". A D5Sen answers with a
+    `PhysicalStateReport` giving the light level in lux."""
+    MOTION_POWER_LEVEL = 0x0501
+    """"Request Motion status - power level". D5Sens never answered it,
+    with or without motion."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2StatusRequest(Dynet2Message):
+    """Ask a device for a status or reading (DyNet 2 type 0x82).
+
+    Layout::
+
+        ac 04 | 82 | source: dev box box | target: dev box box | query (2)
+              | first (2) | last (2) | 00 00 00 | C2 C1
+
+    System Builder shows ``04 03 | 00 01 | 00 01`` as "PE Cell status -
+    filtered LL, user cal (Min 1 - Max 1)": `first` and `last` are the range
+    of sensors (PE cells, motion detectors) to report on. A D5Sen answered
+    each such poll within 60 ms, and every client on the gateway saw the
+    answer. Its reply doesn't depend on the source address.
+    """
+
+    device_code: int
+    """The device being asked."""
+    box: int
+    source_device_code: int
+    """Who is asking."""
+    source_box: int
+    query: int
+    """What to report, 0-65535 (`StatusQuery`)."""
+    first: int = 1
+    """The first sensor to report on, 0-65535."""
+    last: int = 1
+    """The last sensor to report on, 0-65535."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "source_")
+        for name in ("query", "first", "last"):
+            _check_int(name, getattr(self, name), 0, 0xFFFF)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a status request. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _STATUS_REQUEST_LENGTH
+            and body[0] == _STATUS_REQUEST
+            and body[_MEMORY_HEADER_LENGTH:] == bytes(3)
+        ):
+            msg = f"Not a DyNet 2 status request: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            source_device_code=body[1],
+            source_box=int.from_bytes(body[2:4]),
+            device_code=body[4],
+            box=int.from_bytes(body[5:7]),
+            query=int.from_bytes(body[7:9]),
+            first=int.from_bytes(body[9:11]),
+            last=int.from_bytes(body[11:13]),
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            _pad(
+                bytes((_STATUS_REQUEST,))
+                + _address(self.source_device_code, self.source_box)
+                + _address(self.device_code, self.box)
+                + self.query.to_bytes(2)
+                + self.first.to_bytes(2)
+                + self.last.to_bytes(2)
+            )
+        )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownDynet2Message(Dynet2Message):
     """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
 
-    Gateways send one (a greeting) a few times after every new connection.
+    A gateway's 0x83 answer to "Who are you" is one.
     """
 
     frame: Dynet2Frame = field()
@@ -2755,6 +2851,7 @@ type AnyDynet2Message = (
     | Dynet2MemoryData
     | Dynet2WriteMemory
     | Dynet2WriteMemoryAck
+    | Dynet2StatusRequest
     | UnknownDynet2Message
 )
 """Every message `decode` can return for a `Dynet2Frame`."""
@@ -2822,6 +2919,7 @@ _DYNET2_TYPES: tuple[_Dynet2Decoder, ...] = (
     Dynet2MemoryData.from_frame,
     Dynet2WriteMemory.from_frame,
     Dynet2WriteMemoryAck.from_frame,
+    Dynet2StatusRequest.from_frame,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

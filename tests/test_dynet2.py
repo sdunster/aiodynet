@@ -8,10 +8,12 @@ from aiodynet import (
     Dynet2RequestSerialNumber,
     Dynet2SerialNumberReply,
     Dynet2SignonReply,
+    Dynet2StatusRequest,
     InvalidPacketError,
     Packet,
     RequestDeviceStatus,
     RequestSignon,
+    StatusQuery,
     UnknownDynet2Message,
     decode,
 )
@@ -135,8 +137,25 @@ def test_signon_reply_from_the_network_monitor() -> None:
     assert D5SEN.to_frame() == frame
 
 
-def test_greeting_decodes_as_unknown() -> None:
+def test_greeting_is_who_are_you() -> None:
     frame = Dynet2Frame.from_hex(GREETING)
+    message = decode(frame)
+    assert message == Dynet2StatusRequest(
+        device_code=0xAA,
+        box=0x5555,
+        source_device_code=0xDC,
+        source_box=0x5A,
+        query=StatusQuery.WHO_ARE_YOU,
+        first=0,
+        last=0,
+    )
+    assert message.to_frame() == frame
+
+
+def test_gateway_who_are_you_reply_is_unknown() -> None:
+    frame = Dynet2Frame.from_hex(
+        "ac 04 83 dc 00 5a dc 00 5a 00 00 0d 00 00 00 00 00 00 31 ac"
+    )
     message = decode(frame)
     assert message == UnknownDynet2Message(frame=frame)
     assert message.to_frame() == frame

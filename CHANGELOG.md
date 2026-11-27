@@ -47,6 +47,8 @@
   property reads System Builder's DALI commands (`DaliTunnelData`), and
   `motion_event_counts` reads the motion statistics a D5Sen broadcasts every
   five minutes once they are turned on (`MotionEventCounts`).
+- `RawLightLevelReport` types physical 0x0A, a D5Sen's filtered raw
+  illuminance, its answer to the raw light level status poll.
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

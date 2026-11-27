@@ -96,6 +96,7 @@ __all__ = [
     "PresetReport",
     "PresetSelect",
     "ProgramLevelsToPreset",
+    "RawLightLevelReport",
     "RequestChannelLevel",
     "RequestDeviceStatus",
     "RequestFirmwareVersion",
@@ -177,6 +178,7 @@ class PhysicalOpcode(IntEnum):
     """The physical (0x5C) opcodes aiodynet decodes into typed messages."""
 
     DEVICE_IDENTIFY = 0x00
+    RAW_LIGHT_LEVEL = 0x0A
     REQUEST_DEVICE_STATUS = 0x40
     REPORT_DEVICE_STATUS = 0x41
     WRITE_TIME = 0x50
@@ -1846,6 +1848,52 @@ class PhysicalStateReport(PhysicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RawLightLevelReport(PhysicalMessage):
+    """A sensor's raw light level (physical 0x0A).
+
+    A D5Sen sends one in answer to a DyNet 2 "PE Cell status - Filtered Raw
+    LL" poll (`StatusQuery.PE_CELL_RAW_LIGHT_LEVEL`). System Builder labels
+    ``5c b3 1d 0a 00 00 01`` "Light Level Request, Filtered raw illuminance
+    value (Level: 0x01)", even though the sensor sends it. Byte 4 was always
+    0 and is kept raw. Only levels up to 0x10 have been seen (at dusk and
+    night), so byte 5 is assumed to be the high byte of a 16-bit level.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.RAW_LIGHT_LEVEL,)
+
+    level: int
+    """The filtered raw illuminance, 0-65535 (unitless)."""
+    reserved_raw: int = 0
+    """Byte 4."""
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("level", self.level, 0, 0xFFFF)
+        _check_int("reserved_raw", self.reserved_raw, 0, 0xFF)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.RAW_LIGHT_LEVEL,
+            self.reserved_raw,
+            self.level >> 8,
+            self.level & 0xFF,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, reserved, high, low = packet.data
+        return cls(
+            device_code=device_code,
+            box=box,
+            level=high << 8 | low,
+            reserved_raw=reserved,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownMessage(Message):
     """A packet aiodynet has no typed message for. It is passed on unchanged."""
 
@@ -2711,8 +2759,8 @@ class StatusQuery(IntEnum):
     after each new connection, and answer it themselves when a client sends
     it, with a 0x83 frame to that client only (not typed)."""
     PE_CELL_RAW_LIGHT_LEVEL = 0x0401
-    """"PE Cell status - Filtered Raw LL". A D5Sen answers with a physical
-    0x0A packet (not typed: its label wasn't checked)."""
+    """"PE Cell status - Filtered Raw LL". A D5Sen answers with a
+    `RawLightLevelReport`."""
     PE_CELL_LIGHT_LEVEL = 0x0403
     """"PE Cell status - filtered LL, user cal". A D5Sen answers with a
     `PhysicalStateReport` giving the light level in lux."""
@@ -3027,6 +3075,7 @@ type AnyDynet1Message = (
     | DeviceIdentify
     | SetPhysicalChannelLevel
     | PhysicalStateReport
+    | RawLightLevelReport
     | UnknownMessage
 )
 """Every message `decode` can return for a `Packet`."""
@@ -3096,6 +3145,7 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     RequestFirmwareVersion,
     SetPhysicalChannelLevel,
     PhysicalStateReport,
+    RawLightLevelReport,
 )
 
 _Dynet2Decoder = Callable[[Dynet2Frame], "AnyDynet2Message"]

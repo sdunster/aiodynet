@@ -156,6 +156,7 @@ in the DyNet tools and on keypads.
 | `DeviceStatusReport` | physical 0x41 | A device status report; the data bytes are kept raw. `application_running` reads the bootloader-running-reason report |
 | `SetPhysicalChannelLevel` | physical 0x92 | Set one channel of one device to a level (0 off to 0xFE = 100 %, not inverted). System Builder's "flash channel" |
 | `PhysicalStateReport` | physical 0xB8 | A sensor reading, such as the light level in lux (`lux`) |
+| `RawLightLevelReport` | physical 0x0A | A sensor's filtered raw light level (unitless) |
 | `ClockTime`, `ClockDate` | physical 0x50, 0x53 | A device setting or broadcasting the time and date |
 | `RequestFirmwareVersion` | physical 0x80 | Ask a device for its firmware version. It answers with a `DeviceIdentify` |
 | `RequestSignon` | physical 0x40, sub-opcode 0x0A | Ask a device to sign on. It answers with a DyNet 2 `Dynet2SignonReply` |
@@ -289,6 +290,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset` | Opcode list only |
 | `RequestDeviceStatus` (0x16), `DeviceStatusReport.application_running`, `DeviceIdentify.after_reset` | Packets sent to and from D5Sen sensors at one site, labelled by System Builder: "Bootloader running Reason" and its answer "This is not the bootloader, this is the application" (0x55); boot byte 0x80 as "Device Reset" |
 | `SetPhysicalChannelLevel` | Packets System Builder sent to flash a relay channel and a DALI channel at one site, labelled "Set Physical Channel Level (Channel 3, Level 100%, Fade 0.00s)" for level 0xFE. Only levels 0 and 0xFE and fade 0 have been seen; `percent` assumes a linear scale |
+| `RawLightLevelReport` | D5Sen replies to raw light level polls, labelled "Light Level Request, Filtered raw illuminance value (Level: 0x01)". Only levels up to 0x10 seen, so the high byte is assumed |
 | `PhysicalStateReport` | D5Sen replies to PE cell polls, labelled "Reply Present Physical State - Light Level 1627 Lux" for ``01 06 5b``. Other state types are unconfirmed |
 | `RequestFirmwareVersion` | Opcode list, plus requests sent to 45 devices at one site. Each answered with a `DeviceIdentify` from its own address, with the version the site's System Builder job records |
 | `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device. The 44-byte form comes from one frame, sent by a DALI controller that is also an Ethernet bridge: its 16 extra address bytes were that device's IPv6 address. Its source was the all-devices address, so `query` can't match it to the request |

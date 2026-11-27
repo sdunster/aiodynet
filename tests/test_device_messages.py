@@ -19,6 +19,7 @@ from aiodynet import (
     Packet,
     PhysicalStateReport,
     PhysicalStateType,
+    RawLightLevelReport,
     RequestDeviceStatus,
     RequestSignon,
     SetPhysicalChannelLevel,
@@ -151,8 +152,19 @@ def test_round_trip(message: RequestDeviceStatus) -> None:
     assert decode(message.to_packet()) == message
 
 
+@pytest.mark.parametrize(
+    ("raw", "level"), [("5cb31d0a000001", 1), ("5cb31d0a000010", 16)]
+)
+def test_raw_light_level(raw: str, level: int) -> None:
+    # System Builder: "Light Level Request, Filtered raw illuminance value".
+    packet = Packet.from_hex(raw)
+    message = decode(packet)
+    assert message == RawLightLevelReport(device_code=0xB3, box=29, level=level)
+    assert message.to_packet() == packet
+
+
 def test_other_physical_opcodes_stay_unknown() -> None:
-    packet = Packet.from_hex("5cb31d0a000010")  # PE cell raw level reply: unlabelled
+    packet = Packet.from_hex("5cb31d0b000010")
     assert decode(packet) == UnknownMessage(packet=packet)
 
 
@@ -198,6 +210,13 @@ def test_physical_state_lux() -> None:
         channel=byte,
         level=byte,
         fade_raw=byte,
+    )
+    | st.builds(
+        RawLightLevelReport,
+        device_code=byte,
+        box=byte,
+        level=st.integers(0, 0xFFFF),
+        reserved_raw=byte,
     )
     | st.builds(
         PhysicalStateReport,

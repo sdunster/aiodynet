@@ -65,12 +65,14 @@ __all__ = [
     "DeviceStatusReport",
     "DeviceStatusType",
     "Dynet2BuildNumberReply",
+    "Dynet2ChannelLevelReport",
     "Dynet2Command",
     "Dynet2DeviceRequest",
     "Dynet2MemoryData",
     "Dynet2Message",
     "Dynet2PcbVersionReply",
     "Dynet2ReadMemory",
+    "Dynet2RequestChannelLevel",
     "Dynet2SignonReply",
     "Dynet2StatusRequest",
     "Dynet2TunnelData",
@@ -1925,6 +1927,12 @@ _MEMORY_REQUEST_LENGTH = 20
 _STATUS_REQUEST = 0x82
 _STATUS_REQUEST_LENGTH = 20
 _TUNNEL_DATA = 0xA3
+_CHANNEL_LEVEL_REQUEST = 0x22
+_CHANNEL_LEVEL_REPORT = 0x23
+_CHANNEL_LEVEL_REQUEST_LENGTH = 16
+_CHANNEL_LEVEL_REPORT_LENGTH = 32
+_CHANNEL_LEVEL_KIND = 0x03
+_CHANNEL_LEVEL_EXTRA_LENGTH = 10
 _TUNNEL_HEADER_LENGTH = 12
 _DALI_TUNNEL_OPCODE = 0x10
 _DALI_HEADER_LENGTH = 5
@@ -3021,6 +3029,173 @@ class Dynet2TunnelData(Dynet2Message):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2RequestChannelLevel(Dynet2Message):
+    """Ask a logical channel for its level and colour temperature (type 0x22).
+
+    Layout::
+
+        ac 03 | 22 | source: dev box box | area (2) | join | 03 | channel (2)
+              | value (2) | C2 C1
+
+    System Builder shows ``22 da 00 01 | 00 08 | ff | 03 | 00 01 | 00 00`` as
+    "Request Channel Level and Temperature" to "Area Rumpus [8] (8), Channel
+    Downlights (1), Join 0xFF", "Value: 0". It has no target device: the
+    channel's owner answers with a `Dynet2ChannelLevelReport`. The channel is
+    the number System Builder shows, as sent; the matching DyNet 1 request
+    it sent alongside carried channel byte 0x01 too, which aiodynet's DyNet 1
+    messages number as channel 2. Byte 8 (``03``) is kept raw.
+    """
+
+    source_device_code: int
+    """Who is asking."""
+    source_box: int
+    area: int
+    """The area, 0-65535."""
+    channel: int
+    """The channel, 0-65535, as System Builder numbers it."""
+    join: int = JOIN_ALL
+    value_raw: int = 0
+    """Bytes 11-12, "Value" (0 when System Builder asks)."""
+    reserved_raw: int = _CHANNEL_LEVEL_KIND
+    """Byte 8."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "source_")
+        for name in ("area", "channel", "value_raw"):
+            _check_int(name, getattr(self, name), 0, 0xFFFF)
+        _check_int("join", self.join, 0, 0xFF)
+        _check_int("reserved_raw", self.reserved_raw, 0, 0xFF)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a channel level request. Raises `ValueError` if it isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _CHANNEL_LEVEL_REQUEST_LENGTH
+            and body[0] == _CHANNEL_LEVEL_REQUEST
+        ):
+            msg = f"Not a DyNet 2 channel level request: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            source_device_code=body[1],
+            source_box=int.from_bytes(body[2:4]),
+            area=int.from_bytes(body[4:6]),
+            join=body[6],
+            reserved_raw=body[7],
+            channel=int.from_bytes(body[8:10]),
+            value_raw=int.from_bytes(body[10:12]),
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            bytes((_CHANNEL_LEVEL_REQUEST,))
+            + _address(self.source_device_code, self.source_box)
+            + self.area.to_bytes(2)
+            + bytes((self.join, self.reserved_raw))
+            + self.channel.to_bytes(2)
+            + self.value_raw.to_bytes(2)
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2ChannelLevelReport(Dynet2Message):
+    """A logical channel's level and colour temperature (type 0x23).
+
+    Layout::
+
+        ac 07 | 23 | source: dev box box | area (2) | join | 03 | channel (2)
+              | value (2) | current level | target level | current K (2)
+              | target K (2) | 10 bytes, zero so far | C2 C1
+
+    System Builder shows ``... 7f 7f 0c 85 0c 80`` from a DALI controller as
+    "Reply Channel Level and Temperature (Current Level 50%, Target Level
+    50%, Current Temperature 3205 Kelvin, Target Temperature 3200 Kelvin)",
+    for a tunable-white channel. Levels use the same scale as
+    `SetPhysicalChannelLevel`: 0 is off and 0xFE 100 %, not inverted. Both
+    levels were equal in the one reply seen, so their order is assumed to
+    match the temperatures'.
+    """
+
+    device_code: int
+    """The device that owns the channel."""
+    box: int
+    area: int
+    channel: int
+    current_level: int
+    """0 (off) to 0xFE (100 %)."""
+    target_level: int
+    current_kelvin: int
+    """The current colour temperature, in kelvin."""
+    target_kelvin: int
+    join: int = JOIN_ALL
+    value_raw: int = 0
+    reserved_raw: int = _CHANNEL_LEVEL_KIND
+    extra_raw: bytes = bytes(_CHANNEL_LEVEL_EXTRA_LENGTH)
+    """The 10 bytes after the temperatures."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "")
+        for name in ("area", "channel", "value_raw", "current_kelvin", "target_kelvin"):
+            _check_int(name, getattr(self, name), 0, 0xFFFF)
+        for name in ("join", "reserved_raw", "current_level", "target_level"):
+            _check_int(name, getattr(self, name), 0, 0xFF)
+        _check_raw("extra_raw", self.extra_raw, _CHANNEL_LEVEL_EXTRA_LENGTH)
+
+    @property
+    def current_percent(self) -> float:
+        """The current level as a percentage, assuming a linear scale."""
+        return self.current_level * 100 / PHYSICAL_LEVEL_FULL
+
+    @property
+    def target_percent(self) -> float:
+        """The target level as a percentage, assuming a linear scale."""
+        return self.target_level * 100 / PHYSICAL_LEVEL_FULL
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a channel level report. Raises `ValueError` if it isn't one."""
+        body = frame.body
+        if not (
+            len(frame) == _CHANNEL_LEVEL_REPORT_LENGTH
+            and body[0] == _CHANNEL_LEVEL_REPORT
+        ):
+            msg = f"Not a DyNet 2 channel level report: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            area=int.from_bytes(body[4:6]),
+            join=body[6],
+            reserved_raw=body[7],
+            channel=int.from_bytes(body[8:10]),
+            value_raw=int.from_bytes(body[10:12]),
+            current_level=body[12],
+            target_level=body[13],
+            current_kelvin=int.from_bytes(body[14:16]),
+            target_kelvin=int.from_bytes(body[16:18]),
+            extra_raw=body[18:],
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            bytes((_CHANNEL_LEVEL_REPORT,))
+            + _address(self.device_code, self.box)
+            + self.area.to_bytes(2)
+            + bytes((self.join, self.reserved_raw))
+            + self.channel.to_bytes(2)
+            + self.value_raw.to_bytes(2)
+            + bytes((self.current_level, self.target_level))
+            + self.current_kelvin.to_bytes(2)
+            + self.target_kelvin.to_bytes(2)
+            + self.extra_raw
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownDynet2Message(Dynet2Message):
     """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
 
@@ -3093,6 +3268,8 @@ type AnyDynet2Message = (
     | Dynet2WriteMemoryAck
     | Dynet2StatusRequest
     | Dynet2TunnelData
+    | Dynet2RequestChannelLevel
+    | Dynet2ChannelLevelReport
     | UnknownDynet2Message
 )
 """Every message `decode` can return for a `Dynet2Frame`."""
@@ -3163,6 +3340,8 @@ _DYNET2_TYPES: tuple[_Dynet2Decoder, ...] = (
     Dynet2WriteMemoryAck.from_frame,
     Dynet2StatusRequest.from_frame,
     Dynet2TunnelData.from_frame,
+    Dynet2RequestChannelLevel.from_frame,
+    Dynet2ChannelLevelReport.from_frame,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

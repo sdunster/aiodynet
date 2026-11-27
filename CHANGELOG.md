@@ -49,6 +49,11 @@
   five minutes once they are turned on (`MotionEventCounts`).
 - `RawLightLevelReport` types physical 0x0A, a D5Sen's filtered raw
   illuminance, its answer to the raw light level status poll.
+- `Dynet2RequestChannelLevel` (0x22) and `Dynet2ChannelLevelReport` (0x23)
+  type DyNet 2's "Request/Reply Channel Level and Temperature" for a
+  logical channel. The report carries current and target levels (0-0xFE,
+  not inverted) and current and target colour temperatures in kelvin, from
+  tunable-white DALI fittings.
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

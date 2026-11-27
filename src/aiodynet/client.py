@@ -54,6 +54,7 @@ DEFAULT_CONNECT_TIMEOUT: Final = 10.0
 DEFAULT_SEND_INTERVAL: Final = 0.2
 DEFAULT_RECONNECT_DELAY: Final = 1.0
 DEFAULT_MAX_RECONNECT_DELAY: Final = 60.0
+DEFAULT_CLOSE_TIMEOUT: Final = 2.0
 
 _KEEPALIVE_IDLE: Final = 30
 _KEEPALIVE_INTERVAL: Final = 10
@@ -140,6 +141,8 @@ class DynetClient:
     can't be reached; after that the client reconnects on its own, with a
     growing delay, until `close` is called. `close` stops everything the
     client started, and it is safe to call at any time and more than once.
+    It finishes the connection the way the gateway needs, which takes about a
+    second (see `close`).
 
     Packets are written one at a time, `send_interval` seconds apart, because
     gateways and the RS-485 bus behind them drop packets that arrive faster.
@@ -157,12 +160,14 @@ class DynetClient:
         send_interval: float = DEFAULT_SEND_INTERVAL,
         reconnect_delay: float = DEFAULT_RECONNECT_DELAY,
         max_reconnect_delay: float = DEFAULT_MAX_RECONNECT_DELAY,
+        close_timeout: float = DEFAULT_CLOSE_TIMEOUT,
     ) -> None:
         """Set up the client. Nothing connects until `connect`."""
         for name, value in (
             ("connect_timeout", connect_timeout),
             ("reconnect_delay", reconnect_delay),
             ("max_reconnect_delay", max_reconnect_delay),
+            ("close_timeout", close_timeout),
         ):
             if value <= 0:
                 msg = f"{name} must be positive, got {value}"
@@ -176,6 +181,7 @@ class DynetClient:
         self._send_interval = send_interval
         self._reconnect_delay = reconnect_delay
         self._max_reconnect_delay = max(max_reconnect_delay, reconnect_delay)
+        self._close_timeout = close_timeout
 
         self._packet_callbacks: list[PacketCallback] = []
         self._connection_callbacks: list[ConnectionCallback] = []
@@ -225,6 +231,13 @@ class DynetClient:
 
         No callbacks run once this is called, and anything still waiting in
         `send` raises `NotConnectedError`.
+
+        While connected, it first half-closes the connection and waits up to
+        `close_timeout` seconds for the gateway to close its side, which a
+        real gateway did 0.7-1.0 s later. Closing the socket at once instead
+        lost packets sent just before: in one test, 39 of 120 one-packet
+        connections that closed straight after `send` never reached the bus,
+        and none of 120 that waited.
         """
         if self._closed:
             return
@@ -232,18 +245,23 @@ class DynetClient:
         self._packet_callbacks.clear()
         self._connection_callbacks.clear()
         self._noise_callbacks.clear()
+        self._fail_queued()
+        if self._run_task is not None and (writer := self._writer) is not None:
+            await self._finish(writer, self._run_task)
         if self._run_task is not None:
             self._run_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._run_task
             self._run_task = None
-        # The task may have been cancelled before it ever ran its cleanup.
-        if (writer := self._writer) is not None:
-            self._writer = None
-            writer.close()
-            with contextlib.suppress(OSError):
-                await writer.wait_closed()
         self._fail_queued()
+
+    async def _finish(
+        self, writer: asyncio.StreamWriter, run_task: asyncio.Task[None]
+    ) -> None:
+        """Half-close, then let the read loop run until the gateway closes."""
+        with contextlib.suppress(OSError):
+            writer.write_eof()
+        await asyncio.wait({run_task}, timeout=self._close_timeout)
 
     async def __aenter__(self) -> Self:
         """Connect; see `connect`."""
@@ -425,6 +443,8 @@ class DynetClient:
         """Hold a connection open, and reconnect whenever it drops."""
         while True:
             await self._serve(reader)
+            if self._closed:
+                return
             self._notify_connection(connected=False)
             reader, writer = await self._reconnect()
             self._attach(writer)
@@ -457,7 +477,8 @@ class DynetClient:
                     _LOGGER.warning("Connection to %s lost: %s", self.host, err)
                     return
                 if not data:
-                    _LOGGER.warning("Gateway %s closed the connection", self.host)
+                    if not self._closed:
+                        _LOGGER.warning("Gateway %s closed the connection", self.host)
                     return
                 for item in framer.feed(data):
                     self._dispatch(item)

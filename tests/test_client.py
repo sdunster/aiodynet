@@ -57,6 +57,7 @@ async def until(condition: Callable[[], bool], timeout: float = 2.0) -> None:
         {"reconnect_delay": -1},
         {"max_reconnect_delay": 0},
         {"send_interval": -0.1},
+        {"close_timeout": 0},
     ],
 )
 def test_rejects_bad_timings(kwargs: dict[str, float]) -> None:
@@ -146,6 +147,71 @@ async def test_close_is_idempotent(make_client: ClientFactory) -> None:
     await client.close()
     await client.close()
     assert client.closed
+
+
+class SlowCloser:
+    """A gateway that closes its side `delay` s after the client half-closes.
+
+    A real gateway took 0.7-1.0 s; ``delay=None`` never closes.
+    """
+
+    def __init__(self, delay: float | None) -> None:
+        self.delay = delay
+        self.connections = 0
+        self.received = b""
+        self.eof_at: float | None = None
+
+    async def __call__(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        self.connections += 1
+        while data := await reader.read(1024):
+            self.received += data
+        self.eof_at = time.monotonic()
+        await asyncio.sleep(1000 if self.delay is None else self.delay)
+        writer.close()
+
+
+async def serve(handler: SlowCloser) -> tuple[asyncio.Server, int]:
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
+async def test_close_waits_for_the_gateway_to_close(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    handler = SlowCloser(0.2)
+    server, port = await serve(handler)
+    async with server:
+        client = DynetClient("127.0.0.1", port, send_interval=0)
+        await client.connect()
+        await client.send(PresetSelect(area=1, preset=2))
+        started = time.monotonic()
+        with caplog.at_level(logging.WARNING):
+            await client.close()
+        elapsed = time.monotonic() - started
+    assert handler.received == bytes(PresetSelect(area=1, preset=2).to_packet())
+    assert handler.eof_at is not None
+    assert handler.eof_at - started < 0.15  # it half-closed first
+    assert 0.2 <= elapsed < 1
+    assert handler.connections == 1  # and didn't reconnect afterwards
+    assert caplog.records == []
+
+
+async def test_close_gives_up_on_a_gateway_that_stays_open() -> None:
+    handler = SlowCloser(None)
+    server, port = await serve(handler)
+    async with server:
+        client = DynetClient("127.0.0.1", port, close_timeout=0.1)
+        await client.connect()
+        started = time.monotonic()
+        await client.close()
+        elapsed = time.monotonic() - started
+        assert handler.eof_at is not None
+        assert 0.1 <= elapsed < 1
+        assert not client.connected
+        server.close_clients()
+    assert handler.connections == 1
 
 
 async def test_keepalive_is_enabled(make_client: ClientFactory) -> None:

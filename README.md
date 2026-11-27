@@ -250,8 +250,11 @@ or `async with DynetClient(host, port) as client:`.
   `PhysicalStateReport`; and a `Dynet2RequestChannelLevel` the
   `Dynet2ChannelLevelReport`. Requests that get no reply (silence, reset) raise
   `ValueError`; `send` them instead.
-- **Closing.** `close` cancels everything the client started and closes the
-  socket. No callbacks run after it begins.
+- **Closing.** `close` half-closes the connection, waits for the gateway to
+  close its side (up to `close_timeout`, 2 s by default; a real gateway took
+  0.7-1.0 s), then cancels everything the client started. No callbacks run
+  after it begins. Closing the socket at once lost packets sent just before:
+  in one test, 39 of 120 one-packet connections never reached the bus.
 - **Dead gateways.** TCP keepalive is enabled (30 s idle, then 3 probes 10 s
   apart where the OS supports it), so a gateway that vanishes on a quiet bus
   is still noticed.

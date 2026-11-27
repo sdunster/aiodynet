@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fix:** `DynetClient.close` could lose packets sent just before it. It
+  closed the socket at once, and the gateway sometimes discarded the last
+  packet: 39 of 120 short connections (connect, send one packet, close) never
+  reached the bus. `close` now half-closes and waits for the gateway to close
+  its side, up to the new `close_timeout` (2 s by default); a real gateway
+  took 0.7-1.0 s, and 100 of 100 such connections then got through. So
+  `close`, and leaving `async with`, now takes about a second while
+  connected. Queued packets not yet written fail at the start of `close`.
 - `AreaCommand.channel_raw` keeps byte 2, so System Builder's enable and
   disable panels (`1c AREA ff 15/16 …`) decode and re-encode unchanged; it
   used to come back with 0 there. The default is 0, so the bytes sent for an

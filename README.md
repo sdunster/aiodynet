@@ -231,8 +231,14 @@ or `async with DynetClient(host, port) as client:`.
   kept to send later, so a command can't fire long after it was asked for.
 - **Queries.** `await query(RequestPreset(area=12))` sends the request and
   returns the matching `PresetReport`, or raises `TimeoutError`. Likewise a
-  `RequestChannelLevel` returns a `ChannelLevelReport`, and a `RequestSignon`
-  to one device returns its `Dynet2SignonReply`.
+  `RequestChannelLevel` returns a `ChannelLevelReport`, a `RequestSignon` to
+  one device its `Dynet2SignonReply`, and a `RequestDeviceStatus` its
+  `DeviceStatusReport`. For DyNet 2: a `Dynet2RequestSerialNumber` returns
+  the `Dynet2SerialNumberReply`; a `Dynet2DeviceRequest` the sign-on,
+  build-number or PCB reply to its command; a `Dynet2ReadMemory` the
+  `Dynet2MemoryData`; and a light-level `Dynet2StatusRequest` the
+  `PhysicalStateReport`. Requests that get no reply (silence, reset) raise
+  `ValueError`; `send` them instead.
 - **Closing.** `close` cancels everything the client started and closes the
   socket. No callbacks run after it begins.
 - **Dead gateways.** TCP keepalive is enabled (30 s idle, then 3 probes 10 s

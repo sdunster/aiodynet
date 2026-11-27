@@ -13,15 +13,30 @@ from .dynet2 import Dynet2Frame
 from .errors import DynetConnectionError, NotConnectedError
 from .framing import PacketFramer
 from .messages import (
+    DYNET2_ALL_DEVICES,
     AnyMessage,
     ChannelLevelReport,
+    DeviceStatusReport,
+    Dynet2BuildNumberReply,
+    Dynet2Command,
+    Dynet2DeviceRequest,
+    Dynet2MemoryData,
     Dynet2Message,
+    Dynet2PcbVersionReply,
+    Dynet2ReadMemory,
+    Dynet2RequestSerialNumber,
+    Dynet2SerialNumberReply,
     Dynet2SignonReply,
+    Dynet2StatusRequest,
     Message,
+    PhysicalStateReport,
+    PhysicalStateType,
     PresetReport,
     RequestChannelLevel,
+    RequestDeviceStatus,
     RequestPreset,
     RequestSignon,
+    StatusQuery,
     decode,
 )
 from .packet import Packet
@@ -307,41 +322,63 @@ class DynetClient:
     async def query(
         self, request: RequestSignon, *, timeout: float = ...
     ) -> Dynet2SignonReply: ...
+    @overload
     async def query(
-        self,
-        request: RequestPreset | RequestChannelLevel | RequestSignon,
-        *,
-        timeout: float = 2.0,
-    ) -> PresetReport | ChannelLevelReport | Dynet2SignonReply:
+        self, request: RequestDeviceStatus, *, timeout: float = ...
+    ) -> DeviceStatusReport: ...
+    @overload
+    async def query(
+        self, request: Dynet2RequestSerialNumber, *, timeout: float = ...
+    ) -> Dynet2SerialNumberReply: ...
+    @overload
+    async def query(
+        self, request: Dynet2DeviceRequest, *, timeout: float = ...
+    ) -> Dynet2SignonReply | Dynet2BuildNumberReply | Dynet2PcbVersionReply: ...
+    @overload
+    async def query(
+        self, request: Dynet2ReadMemory, *, timeout: float = ...
+    ) -> Dynet2MemoryData: ...
+    @overload
+    async def query(
+        self, request: Dynet2StatusRequest, *, timeout: float = ...
+    ) -> PhysicalStateReport: ...
+    async def query(self, request: Query, *, timeout: float = 2.0) -> Reply:
         """Send a request and wait for the matching reply.
 
         - `RequestPreset` waits for a `PresetReport` from the same area.
         - `RequestChannelLevel` waits for a `ChannelLevelReport` from the same
           area and channel.
-        - `RequestSignon` waits for a `Dynet2SignonReply` from the same device
-          code and box. It must name one device: a request to all devices
-          has many answers, so `subscribe` and `send` it instead.
+        - `RequestSignon` waits for a `Dynet2SignonReply` from the same device.
+        - `RequestDeviceStatus` waits for a `DeviceStatusReport` of the same
+          type from the same device.
+        - `Dynet2RequestSerialNumber` waits for that device's
+          `Dynet2SerialNumberReply`.
+        - `Dynet2DeviceRequest` waits for the device's reply to its command:
+          a `Dynet2SignonReply` for `SIGNON` and `BOOTLOADER_SIGNON`, a
+          `Dynet2BuildNumberReply` for `FIRMWARE_BUILD` and
+          `BOOTLOADER_BUILD`, or a `Dynet2PcbVersionReply` for
+          `PCB_VERSION`. Other commands get no reply, so `send` them.
+        - `Dynet2ReadMemory` waits for the device's `Dynet2MemoryData` from
+          the same address.
+        - `Dynet2StatusRequest` for `StatusQuery.PE_CELL_LIGHT_LEVEL` waits
+          for the device's `PhysicalStateReport` of its light level. The
+          device's box must fit one byte, as the reply is a DyNet 1 packet.
 
-        Raises `TimeoutError` if no reply arrives in `timeout` seconds (a
-        request can go unanswered when no device owns the area). Every
-        subscriber sees the reply as usual.
+        A request must name one device: a request to all devices has many
+        answers, so `subscribe` and `send` it instead. Raises `ValueError`
+        for a request `query` can't wait for, and `TimeoutError` if no reply
+        arrives in `timeout` seconds (a request can go unanswered when no
+        device owns the area). Every subscriber sees the reply as usual.
         """
-        if isinstance(request, RequestSignon) and request.to_all_devices:
-            msg = "query() needs one device; subscribe and send() to ask them all"
-            raise ValueError(msg)
+        _check_query(request)
         loop = asyncio.get_running_loop()
-        result: asyncio.Future[PresetReport | ChannelLevelReport | Dynet2SignonReply]
-        result = loop.create_future()
+        result: asyncio.Future[Reply] = loop.create_future()
 
         def match(received: Received) -> None:
             message = received.message
             if not result.done() and _answers(request, message):
-                # _answers only accepts the three reply types.
-                result.set_result(
-                    cast(
-                        "PresetReport | ChannelLevelReport | Dynet2SignonReply", message
-                    )
-                )
+                # _answers only accepts reply types.
+                result.set_result(cast("Reply", message))
 
         unsubscribe = self.subscribe(match)
         try:
@@ -470,9 +507,81 @@ class DynetClient:
                 )
 
 
-def _answers(
-    request: RequestPreset | RequestChannelLevel | RequestSignon, message: AnyMessage
-) -> bool:
+type Query = (
+    RequestPreset
+    | RequestChannelLevel
+    | RequestSignon
+    | RequestDeviceStatus
+    | Dynet2RequestSerialNumber
+    | Dynet2DeviceRequest
+    | Dynet2ReadMemory
+    | Dynet2StatusRequest
+)
+"""Every request `DynetClient.query` can wait for an answer to."""
+
+type Reply = (
+    PresetReport
+    | ChannelLevelReport
+    | Dynet2SignonReply
+    | DeviceStatusReport
+    | Dynet2SerialNumberReply
+    | Dynet2BuildNumberReply
+    | Dynet2PcbVersionReply
+    | Dynet2MemoryData
+    | PhysicalStateReport
+)
+"""Every reply `DynetClient.query` returns."""
+
+_ANSWERED_COMMANDS: Final = frozenset(
+    {
+        Dynet2Command.SIGNON,
+        Dynet2Command.BOOTLOADER_SIGNON,
+        Dynet2Command.FIRMWARE_BUILD,
+        Dynet2Command.BOOTLOADER_BUILD,
+        Dynet2Command.PCB_VERSION,
+    }
+)
+_ALL_PHYSICAL_DEVICES: Final = (0xAA, 0x55)
+
+
+def _check_query(request: Query) -> None:
+    """Raise `ValueError` for a request `query` can't wait for an answer to."""
+    match request:
+        case RequestSignon() | RequestDeviceStatus() if (
+            request.device_code,
+            request.box,
+        ) == _ALL_PHYSICAL_DEVICES:
+            msg = "query() needs one device; subscribe and send() to ask them all"
+            raise ValueError(msg)
+        case (
+            Dynet2RequestSerialNumber()
+            | Dynet2DeviceRequest()
+            | Dynet2ReadMemory()
+            | Dynet2StatusRequest()
+        ) if (request.device_code, request.box) == DYNET2_ALL_DEVICES:
+            msg = "query() needs one device; subscribe and send() to ask them all"
+            raise ValueError(msg)
+        case Dynet2DeviceRequest() if request.command not in _ANSWERED_COMMANDS:
+            msg = f"Command 0x{request.command:02x} has no reply; use send()"
+            raise ValueError(msg)
+        case Dynet2StatusRequest() if request.query != StatusQuery.PE_CELL_LIGHT_LEVEL:
+            msg = (
+                f"query() can't wait for status query 0x{request.query:04x}; use send()"
+            )
+            raise ValueError(msg)
+        case Dynet2StatusRequest() if request.box > 0xFF:
+            msg = "The light level reply can only come from a box of 0-255"
+            raise ValueError(msg)
+
+
+def _same_device(request: Query, message: AnyMessage) -> bool:
+    return (getattr(message, "device_code", None), getattr(message, "box", None)) == (
+        getattr(request, "device_code", None),
+        getattr(request, "box", None),
+    )
+
+
+def _answers(request: Query, message: AnyMessage) -> bool:  # noqa: PLR0911
     """Whether `message` is the reply `query` waits for after `request`."""
     match request, message:
         case RequestPreset(), PresetReport():
@@ -480,8 +589,42 @@ def _answers(
         case RequestChannelLevel(), ChannelLevelReport():
             return (message.area, message.channel) == (request.area, request.channel)
         case RequestSignon(), Dynet2SignonReply():
-            return (message.device_code, message.box) == (
-                request.device_code,
-                request.box,
+            return _same_device(request, message) and not message.bootloader
+        case RequestDeviceStatus(), DeviceStatusReport():
+            return (
+                _same_device(request, message)
+                and message.sub_opcode == request.status_type
+            )
+        case Dynet2RequestSerialNumber(), Dynet2SerialNumberReply():
+            return _same_device(request, message)
+        case Dynet2DeviceRequest(), (
+            Dynet2SignonReply() | Dynet2BuildNumberReply() | Dynet2PcbVersionReply()
+        ):
+            return _same_device(request, message) and _answers_command(
+                request.command, message
+            )
+        case Dynet2ReadMemory(), Dynet2MemoryData():
+            return _same_device(request, message) and (
+                message.address,
+                message.selector_raw,
+            ) == (request.address, request.selector_raw)
+        case Dynet2StatusRequest(), PhysicalStateReport():
+            return (
+                _same_device(request, message)
+                and message.state_type == PhysicalStateType.LIGHT_LEVEL
             )
     return False
+
+
+def _answers_command(
+    command: int,
+    message: Dynet2SignonReply | Dynet2BuildNumberReply | Dynet2PcbVersionReply,
+) -> bool:
+    if isinstance(message, Dynet2PcbVersionReply):
+        return command == Dynet2Command.PCB_VERSION
+    if isinstance(message, Dynet2SignonReply):
+        bootloader, application = Dynet2Command.BOOTLOADER_SIGNON, Dynet2Command.SIGNON
+    else:
+        bootloader = Dynet2Command.BOOTLOADER_BUILD
+        application = Dynet2Command.FIRMWARE_BUILD
+    return command == (bootloader if message.bootloader else application)

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `DynetClient.query` waits for the answers to `RequestDeviceStatus`,
+  `Dynet2RequestSerialNumber`, `Dynet2DeviceRequest` (sign-on, bootloader
+  sign-on, build numbers, PCB version), `Dynet2ReadMemory` and the
+  light-level `Dynet2StatusRequest`. A request that gets no answer raises
+  `ValueError`. `query(RequestSignon(...))` now skips a bootloader sign-on
+  reply from the same device.
 - `FakeGateway(frame_replies=...)` answers DyNet 2 frames that clients send,
   as `replies` does for packets, and `received_frames` records them.
 - `RequestDeviceStatus` types physical 0x40 Request Device Status for every

@@ -60,6 +60,7 @@ __all__ = [
     "ChannelOn",
     "ClockDate",
     "ClockTime",
+    "DaliTunnelData",
     "DeviceIdentify",
     "DeviceStatusReport",
     "DeviceStatusType",
@@ -72,6 +73,7 @@ __all__ = [
     "Dynet2ReadMemory",
     "Dynet2SignonReply",
     "Dynet2StatusRequest",
+    "Dynet2TunnelData",
     "Dynet2WriteMemory",
     "Dynet2WriteMemoryAck",
     "FadeChannelToLevel",
@@ -82,6 +84,7 @@ __all__ = [
     "LogicalMessage",
     "Message",
     "MotionActivitySync",
+    "MotionEventCounts",
     "OccupancyDetectionAllPresets",
     "Opcode",
     "Panic",
@@ -1873,6 +1876,13 @@ start address and length."""
 _MEMORY_REQUEST_LENGTH = 20
 _STATUS_REQUEST = 0x82
 _STATUS_REQUEST_LENGTH = 20
+_TUNNEL_DATA = 0xA3
+_TUNNEL_HEADER_LENGTH = 12
+_DALI_TUNNEL_OPCODE = 0x10
+_DALI_HEADER_LENGTH = 5
+_METRIC_HEADER = b"\x01\x01"
+_METRIC_HEADER_LENGTH = 16
+_MOTION_EVENT_COUNT = 0x0013
 
 MAX_MEMORY_CHUNK: Final = 111
 """The most data bytes one memory read or write carries to a device whose
@@ -2782,6 +2792,187 @@ class Dynet2StatusRequest(Dynet2Message):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class DaliTunnelData:
+    """DALI commands carried in a `Dynet2TunnelData` frame.
+
+    System Builder shows ``10 20 01 00 01 a5 09 a5 09`` as "DALI Tunneling
+    opcode:0x10, Universe: 2, Galaxy:1, Cookie:1, Format:0x20 0xA509 -
+    INITIALISE ... 0xA509 - INITIALISE" (the universe is the frame's
+    `Dynet2TunnelData.channel_raw`). Format 0x10 carried one 16-bit DALI
+    frame and 0x20 two.
+    """
+
+    opcode: int
+    format_raw: int
+    galaxy: int
+    cookie: int
+    """Counts up across one System Builder session."""
+    frames: bytes
+    """The DALI forward frames, 2 bytes each (address byte, then command)."""
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self | None:
+        """Read DALI tunnel data, or return `None` if `data` isn't that."""
+        if len(data) < _DALI_HEADER_LENGTH or data[0] != _DALI_TUNNEL_OPCODE:
+            return None
+        return cls(
+            opcode=data[0],
+            format_raw=data[1],
+            galaxy=data[2],
+            cookie=int.from_bytes(data[3:5]),
+            frames=data[_DALI_HEADER_LENGTH:],
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MotionEventCounts:
+    """A sensor's motion event counts, a binary metric in a `Dynet2TunnelData`.
+
+    A D5Sen with statistics turned on (in System Builder) broadcasts one
+    every five minutes. System Builder shows the frame as "Binary Metric Data
+    - Metric type: Motion event count, Data: [Detection period: 60, Number of
+    counts: 5, Counts from earliest to latest: (0,0,0,0,4)], Metric address:
+    [DC:0xB3, BN:54], ... Metric id: 3, Metric version: 2.1, Header version:
+    1.1". The metric header's layout is read from that one frame, and the
+    two bytes it doesn't explain are kept raw (`header_raw`).
+    """
+
+    device_code: int
+    """The metric's device (its "metric address")."""
+    box: int
+    period: int
+    """Seconds each count covers."""
+    counts: tuple[int, ...]
+    """Motion events per period, oldest first."""
+    metric_id: int
+    metric_version: str
+    """For example ``2.1``."""
+    header_raw: bytes
+    """Metric bytes 2 and 6, meaning unknown (01 01 so far)."""
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self | None:
+        """Read the metric, or return `None` if `data` isn't a motion event count.
+
+        Layout: header version (01 01), ?, metric address (device, box
+        box), ?, DID (2), metric id (2), metric type (2, 0x13), metric
+        version (2), data length, then period (2), count, and one byte per
+        count.
+        """
+        if (
+            len(data) < _METRIC_HEADER_LENGTH + 3
+            or data[0:2] != _METRIC_HEADER
+            or int.from_bytes(data[11:13]) != _MOTION_EVENT_COUNT
+        ):
+            return None
+        body = data[_METRIC_HEADER_LENGTH:]
+        count = body[2]
+        if data[15] != len(body) or len(body) != 3 + count:
+            return None
+        return cls(
+            device_code=data[3],
+            box=int.from_bytes(data[4:6]),
+            period=int.from_bytes(body[0:2]),
+            counts=tuple(body[3:]),
+            metric_id=int.from_bytes(data[9:11]),
+            metric_version=f"{data[13]}.{data[14]}",
+            header_raw=bytes((data[2], data[6])),
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2TunnelData(Dynet2Message):
+    """Data tunnelled to or from a device (DyNet 2 type 0xA3).
+
+    Layout::
+
+        ac nn | a3 | source: dev box box | target: dev box box | channel
+              | length (2) | offset (2) | data | zero padding | C2 C1
+
+    System Builder sends DALI commands to a DALI controller this way ("Data
+    Tunneling - DALI", see `dali`), and a D5Sen with statistics turned on
+    broadcasts its metrics this way (see `motion_event_counts`). Byte 9
+    (`channel_raw`) was the DALI universe (2) in the first, and 7 in the
+    metrics.
+    """
+
+    device_code: int
+    """The sender."""
+    box: int
+    target_device_code: int
+    target_box: int
+    channel_raw: int
+    """Byte 9."""
+    data: bytes
+    offset: int = 0
+    """System Builder's "Data Offset", 0-65535 (always 0 so far)."""
+    trailer_raw: bytes = b""
+    """Bytes after the data, if they aren't zero padding."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "target_")
+        _check_int("channel_raw", self.channel_raw, 0, 0xFF)
+        _check_int("offset", self.offset, 0, 0xFFFF)
+        for name in ("data", "trailer_raw"):
+            if not isinstance(getattr(self, name), bytes):
+                msg = f"{name} must be bytes, not {type(getattr(self, name)).__name__}"
+                raise TypeError(msg)
+        if len(self.data) > 0xFFFF:
+            msg = f"data must be at most 65535 bytes, got {len(self.data)}"
+            raise ValueError(msg)
+
+    @property
+    def dali(self) -> DaliTunnelData | None:
+        """The DALI commands this carries, or `None`."""
+        return DaliTunnelData.from_bytes(self.data)
+
+    @property
+    def motion_event_counts(self) -> MotionEventCounts | None:
+        """The motion event count metric this carries, or `None`."""
+        return MotionEventCounts.from_bytes(self.data)
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read tunnel data. Raises `ValueError` if the frame isn't that."""
+        body = frame.body
+        end = _TUNNEL_HEADER_LENGTH + int.from_bytes(body[8:10])
+        if not (
+            len(body) >= _TUNNEL_HEADER_LENGTH
+            and body[0] == _TUNNEL_DATA
+            and end <= len(body)
+        ):
+            msg = f"Not DyNet 2 tunnel data: {frame.hex()}"
+            raise ValueError(msg)
+        trailer = body[end:]
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            channel_raw=body[7],
+            offset=int.from_bytes(body[10:12]),
+            data=body[_TUNNEL_HEADER_LENGTH:end],
+            trailer_raw=b"" if trailer == bytes(-end % 4) else trailer,
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            _pad(
+                bytes((_TUNNEL_DATA,))
+                + _address(self.device_code, self.box)
+                + _address(self.target_device_code, self.target_box)
+                + bytes((self.channel_raw,))
+                + len(self.data).to_bytes(2)
+                + self.offset.to_bytes(2)
+                + self.data
+                + self.trailer_raw
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownDynet2Message(Dynet2Message):
     """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
 
@@ -2852,6 +3043,7 @@ type AnyDynet2Message = (
     | Dynet2WriteMemory
     | Dynet2WriteMemoryAck
     | Dynet2StatusRequest
+    | Dynet2TunnelData
     | UnknownDynet2Message
 )
 """Every message `decode` can return for a `Dynet2Frame`."""
@@ -2920,6 +3112,7 @@ _DYNET2_TYPES: tuple[_Dynet2Decoder, ...] = (
     Dynet2WriteMemory.from_frame,
     Dynet2WriteMemoryAck.from_frame,
     Dynet2StatusRequest.from_frame,
+    Dynet2TunnelData.from_frame,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

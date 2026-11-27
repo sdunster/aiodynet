@@ -35,6 +35,10 @@
   `PhysicalStateReport`), the raw light level, the motion power level and
   "Who are you". **The gateway's greeting now decodes as a
   `Dynet2StatusRequest`** for `WHO_ARE_YOU`, not as `UnknownDynet2Message`.
+- `Dynet2TunnelData` types DyNet 2 tunnelled data (0xA3). Its `dali`
+  property reads System Builder's DALI commands (`DaliTunnelData`), and
+  `motion_event_counts` reads the motion statistics a D5Sen broadcasts every
+  five minutes once they are turned on (`MotionEventCounts`).
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

@@ -7,10 +7,10 @@ import contextlib
 import logging
 import socket
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Self, cast, overload
+from typing import TYPE_CHECKING, Final, Self, TypeGuard, cast, overload
 
 from .dynet2 import Dynet2Frame
-from .errors import DynetConnectionError, NotConnectedError
+from .errors import DynetConnectionError, MemoryReadError, NotConnectedError
 from .framing import PacketFramer
 from .messages import (
     DYNET2_ALL_DEVICES,
@@ -22,6 +22,7 @@ from .messages import (
     Dynet2Command,
     Dynet2DeviceRequest,
     Dynet2MemoryData,
+    Dynet2MemoryErrorReply,
     Dynet2Message,
     Dynet2PcbVersionReply,
     Dynet2ReadMemory,
@@ -365,7 +366,9 @@ class DynetClient:
           `BOOTLOADER_BUILD`, or a `Dynet2PcbVersionReply` for
           `PCB_VERSION`. Other commands get no reply, so `send` them.
         - `Dynet2ReadMemory` waits for the device's `Dynet2MemoryData` from
-          the same address.
+          the same address. If the device refuses the read (a
+          `Dynet2MemoryErrorReply`, such as for an address past the end of
+          its memory), raises `MemoryReadError`.
         - `Dynet2StatusRequest` for `StatusQuery.PE_CELL_LIGHT_LEVEL` waits
           for the device's `PhysicalStateReport` of its light level. The
           device's box must fit one byte, as the reply is a DyNet 1 packet.
@@ -384,7 +387,11 @@ class DynetClient:
 
         def match(received: Received) -> None:
             message = received.message
-            if not result.done() and _answers(request, message):
+            if result.done():
+                return
+            if _refuses(message, request):
+                result.set_exception(MemoryReadError(message))
+            elif _answers(request, message):
                 # _answers only accepts reply types.
                 result.set_result(cast("Reply", message))
 
@@ -552,6 +559,17 @@ _ANSWERED_COMMANDS: Final = frozenset(
     }
 )
 _ALL_PHYSICAL_DEVICES: Final = (0xAA, 0x55)
+
+
+def _refuses(message: AnyMessage, request: Query) -> TypeGuard[Dynet2MemoryErrorReply]:
+    """Whether `message` is a device refusing `request`, a memory read."""
+    return (
+        isinstance(request, Dynet2ReadMemory)
+        and isinstance(message, Dynet2MemoryErrorReply)
+        and _same_device(request, message)
+        and (message.address, message.selector_raw)
+        == (request.address, request.selector_raw)
+    )
 
 
 def _check_query(request: Query) -> None:

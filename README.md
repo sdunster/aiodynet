@@ -94,6 +94,7 @@ the order they arrived, `DynetClient.subscribe` callbacks get both, and
 | `Dynet2BuildNumberReply` | reply (0x81), type 0x06 or 0x07 | The firmware's or bootloader's build number |
 | `Dynet2PcbVersionReply` | reply (0x81), type 0x0F | The circuit board's version and revision |
 | `Dynet2ReadMemory`, `Dynet2MemoryData` | 0x9A, 0x9B | Read bytes of a device's memory (EEPROM), at most `MAX_MEMORY_CHUNK` at a time |
+| `Dynet2MemoryErrorReply` | 0x9B | A device refusing a memory read: `MemoryErrorCode.MEMORY_DOES_NOT_EXIST` for an address past the end |
 | `Dynet2WriteMemory`, `Dynet2WriteMemoryAck` | 0x9C, 0x9D | Write bytes of a device's memory. This changes its configuration |
 | `Dynet2RequestChannelLevel`, `Dynet2ChannelLevelReport` | 0x22, 0x23 | Ask a logical channel (area, channel, join) for its level and colour temperature; the report has current and target levels and kelvin |
 | `Dynet2FadeLevelTemperature` | 0x10 | Fade a logical channel to a level and colour temperature (kelvin) |
@@ -244,7 +245,8 @@ or `async with DynetClient(host, port) as client:`.
   `DeviceStatusReport`. For DyNet 2: a `Dynet2RequestSerialNumber` returns
   the `Dynet2SerialNumberReply`; a `Dynet2DeviceRequest` the sign-on,
   build-number or PCB reply to its command; a `Dynet2ReadMemory` the
-  `Dynet2MemoryData`; a light-level `Dynet2StatusRequest` the
+  `Dynet2MemoryData`, or raises `MemoryReadError` if the device refuses it;
+  a light-level `Dynet2StatusRequest` the
   `PhysicalStateReport`; and a `Dynet2RequestChannelLevel` the
   `Dynet2ChannelLevelReport`. Requests that get no reply (silence, reset) raise
   `ValueError`; `send` them instead.
@@ -306,6 +308,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | `Dynet2RequestSerialNumber`, `Dynet2SerialNumberReply` | Requests from System Builder and the replies to them, captured at one site. The serial numbers in 44 replies were checked against that site's System Builder job: 42 matched, and the other two devices had been replaced since the job was last updated. Byte 10 of the reply and its three trailing zero bytes are kept raw |
 | `Dynet2DeviceRequest`, `Dynet2BuildNumberReply`, `Dynet2PcbVersionReply`, `Dynet2SignonReply.bootloader` | Each command sent to a D5Sen (and silence / go back to work to an Antumbra panel) at one site, from System Builder's address, with System Builder labelling the requests and replies. The PCB version matched System Builder's job. Reset and silence were captured from System Builder itself. The build number's byte order is assumed (only build 1 seen) |
 | `Dynet2ReadMemory`, `Dynet2MemoryData`, `Dynet2WriteMemory`, `Dynet2WriteMemoryAck` | System Builder reading and writing two D5Sens' configuration at one site, with its labels for the read ("Main device, memory type EEPROM, start address 0x1a, data length 5", "no error"). A read sent by aiodynet got the expected reply. The write layout and acknowledgement are inferred from System Builder's writes, which matched the change made in its user interface. Selector 02 00 was seen once, meaning unknown |
+| `Dynet2MemoryErrorReply` | Reads at 0x8000 and 0xFF90 sent by aiodynet to a D5Sen, which System Builder labelled "Data Length : 1, Error code : 19, Detail : Failure to read - Memory does not exist". Only code 19 has been seen. A read starting at 0x7FF8 for 16 bytes got 16 bytes of 0xFF and no error, so the device checks only the start address |
 | `Dynet2StatusRequest`, `StatusQuery` | System Builder's polls of two D5Sens at one site, with its labels, and polls sent from aiodynet's side: the PE cell light-level poll got the `PhysicalStateReport` System Builder showed as the lux reading. The motion power-level poll never got an answer. "Who are you" was sent with four address variants; only the gateway answered |
 | `Dynet2RequestChannelLevel`, `Dynet2ChannelLevelReport` | One request from System Builder and a DALI controller's reply at one site, labelled field by field ("Current Level 50%, Target Level 50%, Current Temperature 3205 Kelvin, Target Temperature 3200 Kelvin"). Both levels were equal, so which comes first is assumed; byte 8 (0x03) and the report's last 10 bytes (zero) are kept raw |
 | `Dynet2FadeLevelTemperature` | Five frames System Builder sent to tunable-white DALI downlights at one site (3490 K, 4491 K and 5990 K at 50 %, then 90 % and 100 %), one labelled field by field; the next report showed the new target temperature. Only 2 s fades were seen, so the 10 ms fade step is assumed; bytes 8, 12 and 13 are kept raw |

@@ -19,6 +19,7 @@ from aiodynet import (
     Dynet2DeviceRequest,
     Dynet2Frame,
     Dynet2MemoryData,
+    Dynet2MemoryErrorReply,
     Dynet2Message,
     Dynet2PcbVersionReply,
     Dynet2ReadMemory,
@@ -28,6 +29,8 @@ from aiodynet import (
     Dynet2SignonReply,
     Dynet2StatusRequest,
     DynetClient,
+    MemoryErrorCode,
+    MemoryReadError,
     Message,
     Packet,
     PhysicalStateReport,
@@ -104,6 +107,20 @@ def memory(address: int) -> Dynet2MemoryData:
     )
 
 
+def refusal(address: int) -> Dynet2MemoryErrorReply:
+    return Dynet2MemoryErrorReply(
+        device_code=0xB3,
+        box=29,
+        target_device_code=0xDA,
+        target_box=1,
+        address=address,
+        error_code=MemoryErrorCode.MEMORY_DOES_NOT_EXIST,
+    )
+
+
+END_OF_MEMORY = 0x8000
+
+
 def lux(box: int, value: int) -> PhysicalStateReport:
     return PhysicalStateReport(device_code=0xB3, box=box, state_type=1, value=value)
 
@@ -131,6 +148,12 @@ def level(channel: int, percent_level: int) -> Dynet2ChannelLevelReport:
     )
 
 
+def memory_replies(address: int) -> list[Dynet2Message]:
+    if address >= END_OF_MEMORY:
+        return [refusal(END_OF_MEMORY + 0x10), refusal(address)]
+    return [refusal(END_OF_MEMORY), memory(0x18), memory(address)]
+
+
 def frame_replies(frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
     match decode(frame):
         case Dynet2RequestChannelLevel(channel=channel):
@@ -140,7 +163,7 @@ def frame_replies(frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
         case Dynet2DeviceRequest(command=command):
             return COMMAND_REPLIES[command]
         case Dynet2ReadMemory(address=address):
-            return [memory(0x18), memory(address)]
+            return memory_replies(address)
         case Dynet2StatusRequest():
             return [lux(42, 1627), lux(29, 15)]
     return []
@@ -214,6 +237,17 @@ async def test_read_memory(client: DynetClient) -> None:
         Dynet2ReadMemory(**KITCHEN, **SB, address=0x1A, length=2)
     )
     assert reply == memory(0x1A)
+
+
+async def test_a_refused_read_raises(client: DynetClient) -> None:
+    with pytest.raises(MemoryReadError, match="memory does not exist") as caught:
+        await client.query(
+            Dynet2ReadMemory(**KITCHEN, **SB, address=END_OF_MEMORY, length=16)
+        )
+    assert caught.value.reply == refusal(END_OF_MEMORY)
+    assert str(caught.value) == (
+        "device 0xb3 box 29 refused a read at 0x8000: error 19 (memory does not exist)"
+    )
 
 
 async def test_light_level(client: DynetClient) -> None:

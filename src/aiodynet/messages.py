@@ -72,6 +72,7 @@ __all__ = [
     "Dynet2DeviceRequest",
     "Dynet2FadeLevelTemperature",
     "Dynet2MemoryData",
+    "Dynet2MemoryErrorReply",
     "Dynet2Message",
     "Dynet2PcbVersionReply",
     "Dynet2ReadMemory",
@@ -88,6 +89,7 @@ __all__ = [
     "LightControlAllPresets",
     "LinearPresetSelect",
     "LogicalMessage",
+    "MemoryErrorCode",
     "Message",
     "MotionActivitySync",
     "MotionEventCounts",
@@ -2170,6 +2172,10 @@ _MEMORY_HEADER_LENGTH = 13
 """Body bytes before a memory frame's data: type, two addresses, selector,
 start address and length."""
 _MEMORY_REQUEST_LENGTH = 20
+_MEMORY_ERROR_FLAG = 0x10
+"""Set in a memory read reply's first selector byte when the device refused."""
+_MEMORY_ERROR_LENGTH = 16
+"""Body length of a memory error reply: the header, the code and padding."""
 _STATUS_REQUEST = 0x82
 _STATUS_REQUEST_LENGTH = 20
 _TUNNEL_DATA = 0xA3
@@ -2918,10 +2924,109 @@ class Dynet2MemoryData(_MemoryData):
     `device_code` and `box` are the device the memory belongs to; the target
     is whoever asked. System Builder shows a reply to the read in
     `Dynet2ReadMemory` as "... data length 5, no error". Blank (never
-    written) EEPROM reads as 0xFF.
+    written) EEPROM reads as 0xFF. A refused read comes back as a
+    `Dynet2MemoryErrorReply` instead: one byte, with 0x10 set in the
+    selector's first byte.
     """
 
     frame_type: ClassVar[int] = _MEMORY_DATA
+
+
+class MemoryErrorCode(IntEnum):
+    """Error codes in a `Dynet2MemoryErrorReply`, as System Builder names them."""
+
+    MEMORY_DOES_NOT_EXIST = 19
+    """"Failure to read - Memory does not exist": the start address is past
+    the end of that memory. A D5Sen sent it for reads starting at 0x8000 and
+    0xFF90, so its EEPROM is 32 KiB."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2MemoryErrorReply(Dynet2Message):
+    """A device refusing a `Dynet2ReadMemory` (type 0x9B with an error flag).
+
+    Layout::
+
+        ac 04 | 9b | source: dev box box | target: dev box box
+              | selector (2), first byte | 0x10 | start address (2) | 00 01
+              | error code | 00 00 | C2 C1
+
+    A `Dynet2MemoryData` frame, with 0x10 set in the selector's first byte
+    and one data byte: the error code. System Builder shows a reply to a read
+    at 0x8000 as "... Start Address : 0x8000, Data Length : 1, Error code :
+    19, Detail : Failure to read - Memory does not exist". The device checks
+    only the start address: a read that starts in range and runs past the end
+    gets 0xFF for the missing bytes, with no error.
+    """
+
+    device_code: int
+    """The device that refused."""
+    box: int
+    target_device_code: int
+    """Who the reply is addressed to: the device that asked."""
+    target_box: int
+    address: int
+    """The start address of the refused read, 0-65535."""
+    error_code: int
+    """The error, 0-255. `MemoryErrorCode` names the known ones."""
+    selector_raw: bytes = MAIN_EEPROM
+    """The request's selector, without the error flag."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "", "target_")
+        _check_memory(self)
+        if self.selector_raw[0] & _MEMORY_ERROR_FLAG:
+            msg = (
+                f"selector_raw must not include the error flag 0x10, "
+                f"got {self.selector_raw.hex()}"
+            )
+            raise ValueError(msg)
+        _check_int("error_code", self.error_code, 0, 0xFF)
+
+    @property
+    def error(self) -> MemoryErrorCode | None:
+        """The error, if `MemoryErrorCode` names it."""
+        try:
+            return MemoryErrorCode(self.error_code)
+        except ValueError:
+            return None
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a memory error reply. Raises `ValueError` if the frame isn't one."""
+        body = frame.body
+        if not (
+            len(body) == _MEMORY_ERROR_LENGTH
+            and body[0] == _MEMORY_DATA
+            and body[7] & _MEMORY_ERROR_FLAG
+            and body[11:13] == b"\x00\x01"
+            and body[14:] == b"\x00\x00"
+        ):
+            msg = f"Not a DyNet 2 memory error reply: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            device_code=body[1],
+            box=int.from_bytes(body[2:4]),
+            target_device_code=body[4],
+            target_box=int.from_bytes(body[5:7]),
+            selector_raw=bytes((body[7] & ~_MEMORY_ERROR_FLAG, body[8])),
+            address=int.from_bytes(body[9:11]),
+            error_code=body[13],
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            bytes((_MEMORY_DATA,))
+            + _address(self.device_code, self.box)
+            + _address(self.target_device_code, self.target_box)
+            + bytes((self.selector_raw[0] | _MEMORY_ERROR_FLAG, self.selector_raw[1]))
+            + self.address.to_bytes(2)
+            + b"\x00\x01"
+            + bytes((self.error_code,))
+            + b"\x00\x00"
+        )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3625,6 +3730,7 @@ type AnyDynet2Message = (
     | Dynet2PcbVersionReply
     | Dynet2ReadMemory
     | Dynet2MemoryData
+    | Dynet2MemoryErrorReply
     | Dynet2WriteMemory
     | Dynet2WriteMemoryAck
     | Dynet2StatusRequest
@@ -3706,6 +3812,8 @@ _DYNET2_TYPES: tuple[_Dynet2Decoder, ...] = (
     Dynet2BuildNumberReply.from_frame,
     Dynet2PcbVersionReply.from_frame,
     Dynet2ReadMemory.from_frame,
+    # A memory error reply is a memory data frame with an error flag.
+    Dynet2MemoryErrorReply.from_frame,
     Dynet2MemoryData.from_frame,
     Dynet2WriteMemory.from_frame,
     Dynet2WriteMemoryAck.from_frame,

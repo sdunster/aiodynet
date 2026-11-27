@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `Dynet2MemoryErrorReply` types a device refusing a `Dynet2ReadMemory`:
+  a 0x9B frame with 0x10 set in the selector's first byte and one data byte,
+  the error code. `MemoryErrorCode.MEMORY_DOES_NOT_EXIST` (19) is System
+  Builder's "Failure to read - Memory does not exist", sent for a start
+  address past the end of the memory. These frames used to decode as
+  `Dynet2MemoryData` with `selector_raw` `10 00`.
+- `DynetClient.query` raises `MemoryReadError` (a `DynetError`, with the
+  reply in `reply`) when the device refuses a `Dynet2ReadMemory`. It used to
+  ignore the refusal and raise `TimeoutError`.
+
 ## 0.4.0 (2026-11-27)
 
 Types the device-level traffic decoded with System Builder at one site:

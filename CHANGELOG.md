@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `RequestDeviceStatus` types physical 0x40 Request Device Status for every
+  status type except sign-on (still `RequestSignon`). Those packets used to
+  decode as `UnknownMessage`. `DeviceStatusType` names the known types:
+  `DO_D2_SIGNON` (0x0A) and `BOOTLOADER_RUNNING_REASON` (0x16).
+- `DeviceStatusReport.application_running` reads a bootloader-running-reason
+  report: data byte 0x55 (`APPLICATION_RUNNING`) means the application, not
+  the bootloader, is running.
+- `DeviceIdentify.after_reset` is true when `boot_raw` is 0x80
+  (`DEVICE_RESET`), which System Builder shows as "Device Reset".
+
 ## 0.3.0 (2026-11-27)
 
 - `DynetClient.send` also takes DyNet 2 messages (`Dynet2Message`) and raw

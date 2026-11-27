@@ -23,6 +23,8 @@ from .errors import (
 )
 from .framing import PacketFramer
 from .messages import (
+    APPLICATION_RUNNING,
+    DEVICE_RESET,
     DYNET2_ALL_DEVICES,
     MAX_CHANNEL_FADE,
     MAX_PRESET_FADE,
@@ -42,6 +44,7 @@ from .messages import (
     ClockTime,
     DeviceIdentify,
     DeviceStatusReport,
+    DeviceStatusType,
     Dynet2Message,
     Dynet2RequestSerialNumber,
     Dynet2SerialNumberReply,
@@ -64,6 +67,7 @@ from .messages import (
     PresetSelect,
     ProgramLevelsToPreset,
     RequestChannelLevel,
+    RequestDeviceStatus,
     RequestFirmwareVersion,
     RequestPreset,
     RequestPresetLevel,
@@ -86,6 +90,8 @@ from .packet import PACKET_LENGTH, Packet, SyncType
 from .values import JOIN_ALL, Level
 
 __all__ = [
+    "APPLICATION_RUNNING",
+    "DEVICE_RESET",
     "DYNET2_ALL_DEVICES",
     "JOIN_ALL",
     "MAX_CHANNEL_FADE",
@@ -108,6 +114,7 @@ __all__ = [
     "ConnectionCallback",
     "DeviceIdentify",
     "DeviceStatusReport",
+    "DeviceStatusType",
     "Dynet2Frame",
     "Dynet2Message",
     "Dynet2RequestSerialNumber",
@@ -142,6 +149,7 @@ __all__ = [
     "ProgramLevelsToPreset",
     "Received",
     "RequestChannelLevel",
+    "RequestDeviceStatus",
     "RequestFirmwareVersion",
     "RequestPreset",
     "RequestPresetLevel",

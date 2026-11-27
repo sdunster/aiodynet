@@ -33,13 +33,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
 from ipaddress import IPv6Address
-from typing import ClassVar, Self, cast, overload, override
+from typing import ClassVar, Final, Self, cast, overload, override
 
 from .dynet2 import DYNET2_MAX_LENGTH, DYNET2_MIN_LENGTH, Dynet2Frame
 from .packet import Packet, SyncType
 from .values import FADE_UNIT, JOIN_ALL, Level, decode_fade, encode_fade
 
 __all__ = [
+    "APPLICATION_RUNNING",
+    "DEVICE_RESET",
     "DYNET2_ALL_DEVICES",
     "AnyDynet1Message",
     "AnyDynet2Message",
@@ -57,6 +59,7 @@ __all__ = [
     "ClockTime",
     "DeviceIdentify",
     "DeviceStatusReport",
+    "DeviceStatusType",
     "Dynet2Message",
     "Dynet2SignonReply",
     "FadeChannelToLevel",
@@ -77,6 +80,7 @@ __all__ = [
     "PresetSelect",
     "ProgramLevelsToPreset",
     "RequestChannelLevel",
+    "RequestDeviceStatus",
     "RequestFirmwareVersion",
     "RequestPreset",
     "RequestPresetLevel",
@@ -161,8 +165,30 @@ class PhysicalOpcode(IntEnum):
     REQUEST_FIRMWARE_VERSION = 0x80
 
 
-_DO_D2_SIGNON = 0x0A
-"""The Request Device Status sub-opcode that asks a device to sign on."""
+class DeviceStatusType(IntEnum):
+    """What a physical 0x40 Request Device Status asks for (byte 6).
+
+    The same value comes back in byte 6 of the 0x41 `DeviceStatusReport`.
+    Names are the ones System Builder shows.
+    """
+
+    DO_D2_SIGNON = 0x0A
+    """Sign on over DyNet 2. Sent as `RequestSignon`; the answer is a DyNet 2
+    `Dynet2SignonReply`."""
+    BOOTLOADER_RUNNING_REASON = 0x16
+    """Whether the device is running its application or its bootloader, and
+    why. System Builder asks this before reading a device's memory."""
+
+
+_DO_D2_SIGNON = DeviceStatusType.DO_D2_SIGNON
+
+APPLICATION_RUNNING: Final = 0x55
+"""Data byte 1 of a `BOOTLOADER_RUNNING_REASON` report when the application,
+not the bootloader, is running ("This is not the bootloader, this is the
+application")."""
+
+DEVICE_RESET: Final = 0x80
+"""`DeviceIdentify.boot_raw` when a device announces itself after a reset."""
 
 _ALL_PHYSICAL_DEVICES = (0xAA, 0x55)
 
@@ -1471,13 +1497,55 @@ class RequestSignon(PhysicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RequestDeviceStatus(PhysicalMessage):
+    """Ask a device for one kind of status: physical 0x40 Request Device Status.
+
+    Byte 6 says which (`DeviceStatusType`); bytes 4-5 are unused. The device
+    answers with a `DeviceStatusReport` carrying the same type. Sign-on
+    (0x0A) has its own class, `RequestSignon`, because a DyNet 2 frame
+    answers it, so this class refuses that type.
+
+    ``5c b3 1d 40 00 00 16`` ("Request Device Status - Bootloader running
+    Reason") got ``5c b3 1d 41 55 ff 16`` back from a D5Sen within 40 ms.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.REQUEST_DEVICE_STATUS,)
+
+    status_type: int
+    """What to ask for, 0-255. `DeviceStatusType` names the known ones."""
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("status_type", self.status_type, 0, 0xFF)
+        if self.status_type == _DO_D2_SIGNON:
+            msg = "status_type 0x0a is sign-on: use RequestSignon"
+            raise ValueError(msg)
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.REQUEST_DEVICE_STATUS, 0, 0, self.status_type
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, _, _, status_type = packet.data
+        return cls(device_code=device_code, box=box, status_type=status_type)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class DeviceIdentify(PhysicalMessage):
     """A device saying what it is (physical opcode 0x00).
 
     Devices send these in bursts, for example on start-up. The official DyNet
     network monitor shows ``5c b3 2a 00 02 11 00`` as "Device D5Sen (0xB3)
-    Box 42 v02.11". It doesn't show byte 6 (boot / sign-on), so that is kept
-    raw.
+    Box 42 v02.11". Byte 6 (boot / sign-on) is kept raw. System Builder
+    shows 0x00 as "Device Identify" and 0x80 (`DEVICE_RESET`) as "Device
+    Reset": a device sends 0x80 as it starts up after a reset command, and
+    0x00 at other times (a D5Sen also sends one when it sees a flash of
+    light).
     """
 
     opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.DEVICE_IDENTIFY,)
@@ -1500,6 +1568,11 @@ class DeviceIdentify(PhysicalMessage):
     def firmware_version(self) -> str:
         """The firmware version as the network monitor prints it, e.g. ``02.11``."""
         return f"{self.firmware_major:02x}.{self.firmware_minor:02x}"
+
+    @property
+    def after_reset(self) -> bool:
+        """Whether the device sent this as it started up after a reset."""
+        return self.boot_raw == DEVICE_RESET
 
     @override
     def to_packet(self) -> Packet:
@@ -1527,12 +1600,14 @@ class DeviceIdentify(PhysicalMessage):
 class DeviceStatusReport(PhysicalMessage):
     """A device status report (physical opcode 0x41 Report Device Status).
 
-    The answer to physical 0x40 Request Device Status. Byte 6 is the
-    sub-opcode, the same as in the request (0x0A is "Do D2 Signon"). What
-    the two data bytes mean depends on the sub-opcode, so they are kept raw.
-    The official DyNet network monitor shows ``5c aa 55 41 00 00 0a`` as
-    "Report Device Status - Do D2 Signon (data 1 0x00, data 2 0x00)",
-    addressed to all devices.
+    The answer to physical 0x40 Request Device Status (`RequestDeviceStatus`).
+    Byte 6 is the sub-opcode, the same as in the request (see
+    `DeviceStatusType`). What the two data bytes mean depends on the
+    sub-opcode, so they are kept raw. The official DyNet network monitor
+    shows ``5c aa 55 41 00 00 0a`` as "Report Device Status - Do D2 Signon
+    (data 1 0x00, data 2 0x00)", addressed to all devices, and
+    ``5c b3 1d 41 55 ff 16`` as "Report Device Status - Bootloader running
+    Reason (This is not the bootloader, this is the application)".
     """
 
     opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.REPORT_DEVICE_STATUS,)
@@ -1547,6 +1622,18 @@ class DeviceStatusReport(PhysicalMessage):
         _check_int("sub_opcode", self.sub_opcode, 0, 0xFF)
         _check_int("data1_raw", self.data1_raw, 0, 0xFF)
         _check_int("data2_raw", self.data2_raw, 0, 0xFF)
+
+    @property
+    def application_running(self) -> bool | None:
+        """Whether the application (not the bootloader) is running.
+
+        Only for a `BOOTLOADER_RUNNING_REASON` report; `None` for any other.
+        Only `APPLICATION_RUNNING` has been seen. Any other value is taken to
+        mean the bootloader is running, with data byte 1 as its reason.
+        """
+        if self.sub_opcode != DeviceStatusType.BOOTLOADER_RUNNING_REASON:
+            return None
+        return self.data1_raw == APPLICATION_RUNNING
 
     @override
     def to_packet(self) -> Packet:
@@ -1977,6 +2064,7 @@ type AnyDynet1Message = (
     | ClockTime
     | ClockDate
     | RequestSignon
+    | RequestDeviceStatus
     | RequestFirmwareVersion
     | DeviceStatusReport
     | DeviceIdentify
@@ -2034,6 +2122,7 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     ClockTime,
     ClockDate,
     RequestSignon,
+    RequestDeviceStatus,
     DeviceIdentify,
     DeviceStatusReport,
     RequestFirmwareVersion,
@@ -2048,7 +2137,7 @@ _Decoder = Callable[[Packet], "AnyDynet1Message"]
 _DECODERS: dict[tuple[int, int], list[_Decoder]] = {}
 """The decoders for each (sync, opcode), tried in order. An opcode can carry
 more than one message, told apart by its data bytes (physical 0x40 is both
-`RequestSignon` and other device status requests)."""
+`RequestSignon` and `RequestDeviceStatus`)."""
 for _type in _LOGICAL_TYPES:
     for _opcode in _type.opcodes:
         # Every concrete class is a member of AnyMessage; mypy can't see that

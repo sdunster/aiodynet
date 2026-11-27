@@ -141,8 +141,9 @@ in the DyNet tools and on keypads.
 | `SuspendOccupancyDetection`, `ResumeOccupancyDetection` | 0x3A, 0x3B | The same for the current preset only |
 | `SetUserPreference`, `RequestUserPreference`, `UserPreferenceReport` | 0x48–0x4A | Device-specific 16-bit preference values. For preference 0x0C, `UserPreferenceReport.temperature` gives °C |
 | `RequestPresetLevel`, `PresetLevelReport` | 0x91, 0x92 | The level a channel has stored for a preset |
-| `DeviceIdentify` | physical 0x00 | A device saying what it is, with its firmware version |
-| `DeviceStatusReport` | physical 0x41 | A device status report; the data bytes are kept raw |
+| `DeviceIdentify` | physical 0x00 | A device saying what it is, with its firmware version. `after_reset` is true when it was sent on start-up after a reset |
+| `RequestDeviceStatus` | physical 0x40 | Ask a device for a kind of status (`DeviceStatusType`), except sign-on. It answers with a `DeviceStatusReport` |
+| `DeviceStatusReport` | physical 0x41 | A device status report; the data bytes are kept raw. `application_running` reads the bootloader-running-reason report |
 | `ClockTime`, `ClockDate` | physical 0x50, 0x53 | A device setting or broadcasting the time and date |
 | `RequestFirmwareVersion` | physical 0x80 | Ask a device for its firmware version. It answers with a `DeviceIdentify` |
 | `RequestSignon` | physical 0x40, sub-opcode 0x0A | Ask a device to sign on. It answers with a DyNet 2 `Dynet2SignonReply` |
@@ -268,6 +269,7 @@ DyNet documentation is thin, so this is the evidence for each encoding:
 | All other extended messages | Byte layout from the opcode list only |
 | `AreaCascadingSync`, `OccupancyDetectionAllPresets` (0x01 = resume), `DeviceIdentify` (version as hex digits), `DeviceStatusReport`, `UserPreferenceReport.temperature` (whole degrees + hundredths) | Opcode list, plus real packets decoded by the official DyNet network monitor. Negative temperatures haven't been seen, so they come back as `None` |
 | `HoldTimerAllPresets`, `SuspendOccupancyDetection`, `ResumeOccupancyDetection`, `ProgramLevelsToPreset` | Opcode list only |
+| `RequestDeviceStatus` (0x16), `DeviceStatusReport.application_running`, `DeviceIdentify.after_reset` | Packets sent to and from D5Sen sensors at one site, labelled by System Builder: "Bootloader running Reason" and its answer "This is not the bootloader, this is the application" (0x55); boot byte 0x80 as "Device Reset" |
 | `RequestFirmwareVersion` | Opcode list, plus requests sent to 45 devices at one site. Each answered with a `DeviceIdentify` from its own address, with the version the site's System Builder job records |
 | `Dynet2SignonReply` | One frame from a real D5Sen, decoded field by field by the official DyNet network monitor. Telling a sign-on apart from other 0x81 replies by byte 9 = 0x01 rests on that frame plus one non-sign-on reply. At one site the request got no replies when sent to all devices, only when addressed to a single device. The 44-byte form comes from one frame, sent by a DALI controller that is also an Ethernet bridge: its 16 extra address bytes were that device's IPv6 address. Its source was the all-devices address, so `query` can't match it to the request |
 | `Dynet2RequestSerialNumber`, `Dynet2SerialNumberReply` | Requests from System Builder and the replies to them, captured at one site. The serial numbers in 44 replies were checked against that site's System Builder job: 42 matched, and the other two devices had been replaced since the job was last updated. Byte 10 of the reply and its three trailing zero bytes are kept raw |

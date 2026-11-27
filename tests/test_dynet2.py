@@ -10,9 +10,9 @@ from aiodynet import (
     Dynet2SignonReply,
     InvalidPacketError,
     Packet,
+    RequestDeviceStatus,
     RequestSignon,
     UnknownDynet2Message,
-    UnknownMessage,
     decode,
 )
 from aiodynet.dynet2 import DYNET2_SYNC, dynet2_checksum, dynet2_length
@@ -222,9 +222,11 @@ def test_request_signon_packet() -> None:
     assert RequestSignon(device_code=0xAA, box=0x55).to_all_devices
 
 
-def test_other_device_status_requests_are_unknown() -> None:
+def test_other_device_status_requests_are_not_sign_on() -> None:
     packet = Packet.from_hex("5c b3 2a 40 00 00 04")  # sub-opcode 0x04, PCB link
-    assert decode(packet) == UnknownMessage(packet=packet)
+    assert decode(packet) == RequestDeviceStatus(
+        device_code=0xB3, box=42, status_type=4
+    )
 
 
 # Serial numbers. REQUEST and REPLY above are a real request (from System

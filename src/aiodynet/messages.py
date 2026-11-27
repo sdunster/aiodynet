@@ -43,6 +43,7 @@ __all__ = [
     "APPLICATION_RUNNING",
     "DEVICE_RESET",
     "DYNET2_ALL_DEVICES",
+    "PHYSICAL_LEVEL_FULL",
     "AnyDynet1Message",
     "AnyDynet2Message",
     "AnyMessage",
@@ -75,6 +76,8 @@ __all__ = [
     "Panic",
     "PhysicalMessage",
     "PhysicalOpcode",
+    "PhysicalStateReport",
+    "PhysicalStateType",
     "PresetLevelReport",
     "PresetReport",
     "PresetSelect",
@@ -90,6 +93,7 @@ __all__ = [
     "RestoreSavedPreset",
     "ResumeOccupancyDetection",
     "SetChannelLevel",
+    "SetPhysicalChannelLevel",
     "SetUserPreference",
     "StopFade",
     "SuspendOccupancyDetection",
@@ -163,6 +167,8 @@ class PhysicalOpcode(IntEnum):
     WRITE_TIME = 0x50
     WRITE_DATE = 0x53
     REQUEST_FIRMWARE_VERSION = 0x80
+    SET_PHYSICAL_CHANNEL_LEVEL = 0x92
+    REPLY_PHYSICAL_STATE = 0xB8
 
 
 class DeviceStatusType(IntEnum):
@@ -189,6 +195,17 @@ application")."""
 
 DEVICE_RESET: Final = 0x80
 """`DeviceIdentify.boot_raw` when a device announces itself after a reset."""
+
+PHYSICAL_LEVEL_FULL: Final = 0xFE
+"""`SetPhysicalChannelLevel.level` for 100 %. 0 is off."""
+
+
+class PhysicalStateType(IntEnum):
+    """What a `PhysicalStateReport` reports (byte 4)."""
+
+    LIGHT_LEVEL = 0x01
+    """A sensor's light level in lux."""
+
 
 _ALL_PHYSICAL_DEVICES = (0xAA, 0x55)
 
@@ -1691,6 +1708,129 @@ class RequestFirmwareVersion(PhysicalMessage):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class SetPhysicalChannelLevel(PhysicalMessage):
+    """Set one output channel of one device (physical 0x92).
+
+    ``5c dev box 92 channel level fade``: this addresses a device's own
+    channel directly, not a logical area. System Builder's "flash channel"
+    sends it, alternating 0 and 100 %, and shows ``5c 4c 05 92 03 fe 00``
+    as "Set Physical Channel Level (Channel 3, Level 100%, Fade 0.00s)".
+
+    Unlike logical channel levels, the level is **not inverted**: 0 is off
+    and 0xFE (`PHYSICAL_LEVEL_FULL`) is 100 %. Only those two values have
+    been seen; `percent` assumes the scale between them is linear. The
+    channel is the number System Builder shows, sent as is. The fade byte's
+    unit is unknown (only 0, "0.00s", has been seen), so it is kept raw.
+
+    When System Builder fades a DALI controller's channel with a DyNet 2
+    "Fade Physical Channel Level" frame, the gateway passes it on to other
+    clients as this packet.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.SET_PHYSICAL_CHANNEL_LEVEL,)
+
+    channel: int
+    """The device's channel number, 0-255, as System Builder shows it."""
+    level: int
+    """0 (off) to 0xFE (100 %). 0xFF has not been seen."""
+    fade_raw: int = 0
+    """Byte 6. Only 0 (no fade) has been seen."""
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("channel", self.channel, 0, 0xFF)
+        _check_int("level", self.level, 0, 0xFF)
+        _check_int("fade_raw", self.fade_raw, 0, 0xFF)
+
+    @classmethod
+    def from_percent(
+        cls, *, device_code: int, box: int, channel: int, percent: float
+    ) -> Self:
+        """Build one from a percentage (0-100), with no fade."""
+        if not 0 <= percent <= 100:
+            msg = f"percent must be 0-100, got {percent}"
+            raise ValueError(msg)
+        level = round(percent * PHYSICAL_LEVEL_FULL / 100)
+        return cls(device_code=device_code, box=box, channel=channel, level=level)
+
+    @property
+    def percent(self) -> float:
+        """The level as a percentage, assuming a linear scale."""
+        return self.level * 100 / PHYSICAL_LEVEL_FULL
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.SET_PHYSICAL_CHANNEL_LEVEL,
+            self.channel,
+            self.level,
+            self.fade_raw,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, channel, level, fade = packet.data
+        return cls(
+            device_code=device_code,
+            box=box,
+            channel=channel,
+            level=level,
+            fade_raw=fade,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PhysicalStateReport(PhysicalMessage):
+    """A device reporting a reading: physical 0xB8 "Reply Present Physical State".
+
+    ``5c dev box b8 type value_high value_low``. A D5Sen sends one in answer
+    to a DyNet 2 PE cell status poll (request type 0x82), and System
+    Builder shows ``5c b3 2a b8 01 06 5b`` as "Reply Present Physical State -
+    Light Level 1627 Lux". Other types are kept as the raw 16-bit value.
+    """
+
+    opcodes: ClassVar[tuple[int, ...]] = (PhysicalOpcode.REPLY_PHYSICAL_STATE,)
+
+    state_type: int
+    """What the value is (`PhysicalStateType`)."""
+    value: int
+    """The reading, 0-65535 (bytes 5-6, big-endian)."""
+
+    @override
+    def __post_init__(self) -> None:
+        PhysicalMessage.__post_init__(self)
+        _check_int("state_type", self.state_type, 0, 0xFF)
+        _check_int("value", self.value, 0, 0xFFFF)
+
+    @property
+    def lux(self) -> int | None:
+        """The light level in lux, or `None` if this reports something else."""
+        return self.value if self.state_type == PhysicalStateType.LIGHT_LEVEL else None
+
+    @override
+    def to_packet(self) -> Packet:
+        return self._packet(
+            PhysicalOpcode.REPLY_PHYSICAL_STATE,
+            self.state_type,
+            self.value >> 8,
+            self.value & 0xFF,
+        )
+
+    @override
+    @classmethod
+    def from_packet(cls, packet: Packet) -> Self:
+        _, device_code, box, _, state_type, high, low = packet.data
+        return cls(
+            device_code=device_code,
+            box=box,
+            state_type=state_type,
+            value=high << 8 | low,
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownMessage(Message):
     """A packet aiodynet has no typed message for. It is passed on unchanged."""
 
@@ -2068,6 +2208,8 @@ type AnyDynet1Message = (
     | RequestFirmwareVersion
     | DeviceStatusReport
     | DeviceIdentify
+    | SetPhysicalChannelLevel
+    | PhysicalStateReport
     | UnknownMessage
 )
 """Every message `decode` can return for a `Packet`."""
@@ -2126,6 +2268,8 @@ _PHYSICAL_TYPES: tuple[type[PhysicalMessage], ...] = (
     DeviceIdentify,
     DeviceStatusReport,
     RequestFirmwareVersion,
+    SetPhysicalChannelLevel,
+    PhysicalStateReport,
 )
 
 _DYNET2_TYPES: tuple[

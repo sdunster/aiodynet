@@ -11,6 +11,12 @@
   the bootloader, is running.
 - `DeviceIdentify.after_reset` is true when `boot_raw` is 0x80
   (`DEVICE_RESET`), which System Builder shows as "Device Reset".
+- `SetPhysicalChannelLevel` types physical 0x92 "Set Physical Channel
+  Level": one channel of one device, not a logical area. Its level is not
+  inverted (0 off, 0xFE = `PHYSICAL_LEVEL_FULL` = 100 %), and
+  `from_percent` builds one. The fade byte is kept raw (only 0 seen).
+- `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
+  a sensor reading; `lux` gives the light level (type 0x01).
 
 ## 0.3.0 (2026-11-27)
 

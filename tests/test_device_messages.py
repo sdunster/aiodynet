@@ -11,13 +11,17 @@ from hypothesis import strategies as st
 from aiodynet import (
     APPLICATION_RUNNING,
     DEVICE_RESET,
+    PHYSICAL_LEVEL_FULL,
     DeviceIdentify,
     DeviceStatusReport,
     DeviceStatusType,
     Message,
     Packet,
+    PhysicalStateReport,
+    PhysicalStateType,
     RequestDeviceStatus,
     RequestSignon,
+    SetPhysicalChannelLevel,
     UnknownMessage,
     decode,
 )
@@ -50,6 +54,33 @@ SITE_VECTORS: list[tuple[str, Message]] = [
             firmware_major=0x02,
             firmware_minor=0x11,
             boot_raw=DEVICE_RESET,
+        ),
+    ),
+    # System Builder flashing relay channel 3 of a DDRC (0x4C) box 5:
+    # "Set Physical Channel Level (Channel 3, Level 100%, Fade 0.00s)".
+    (
+        "5c4c059203fe00",
+        SetPhysicalChannelLevel(
+            device_code=0x4C, box=5, channel=3, level=PHYSICAL_LEVEL_FULL
+        ),
+    ),
+    (
+        "5c4c0592030000",
+        SetPhysicalChannelLevel(device_code=0x4C, box=5, channel=3, level=0),
+    ),
+    # The gateway's translation of a DyNet 2 fade to DALI channel 75.
+    (
+        "5c642a924bfe00",
+        SetPhysicalChannelLevel(device_code=0x64, box=42, channel=75, level=0xFE),
+    ),
+    # "Reply Present Physical State - Light Level 1627 Lux", from a D5Sen.
+    (
+        "5cb32ab801065b",
+        PhysicalStateReport(
+            device_code=0xB3,
+            box=42,
+            state_type=PhysicalStateType.LIGHT_LEVEL,
+            value=1627,
         ),
     ),
 ]
@@ -123,3 +154,58 @@ def test_round_trip(message: RequestDeviceStatus) -> None:
 def test_other_physical_opcodes_stay_unknown() -> None:
     packet = Packet.from_hex("5cb31d0a000010")  # PE cell raw level reply: unlabelled
     assert decode(packet) == UnknownMessage(packet=packet)
+
+
+def test_physical_level_percent() -> None:
+    full = SetPhysicalChannelLevel.from_percent(
+        device_code=0x4C, box=5, channel=3, percent=100
+    )
+    assert full.level == PHYSICAL_LEVEL_FULL
+    assert full.percent == 100
+    assert full.fade_raw == 0
+    half = SetPhysicalChannelLevel.from_percent(
+        device_code=0x4C, box=5, channel=3, percent=50
+    )
+    assert half.level == 0x7F
+    assert (
+        SetPhysicalChannelLevel.from_percent(
+            device_code=0x4C, box=5, channel=3, percent=0
+        ).level
+        == 0
+    )
+
+
+@pytest.mark.parametrize("percent", [-1, 100.5])
+def test_physical_level_percent_range(percent: float) -> None:
+    with pytest.raises(ValueError, match="percent must be 0-100"):
+        SetPhysicalChannelLevel.from_percent(
+            device_code=0x4C, box=5, channel=3, percent=percent
+        )
+
+
+def test_physical_state_lux() -> None:
+    light = PhysicalStateReport(device_code=0xB3, box=29, state_type=1, value=15)
+    assert light.lux == 15
+    other = PhysicalStateReport(device_code=0xB3, box=29, state_type=0x0D, value=15)
+    assert other.lux is None
+
+
+@given(
+    st.builds(
+        SetPhysicalChannelLevel,
+        device_code=byte,
+        box=byte,
+        channel=byte,
+        level=byte,
+        fade_raw=byte,
+    )
+    | st.builds(
+        PhysicalStateReport,
+        device_code=byte,
+        box=byte,
+        state_type=byte,
+        value=st.integers(0, 0xFFFF),
+    )
+)
+def test_physical_round_trip(message: Message) -> None:
+    assert decode(message.to_packet()) == message

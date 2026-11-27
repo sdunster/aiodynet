@@ -757,7 +757,12 @@ class _AreaFadeMessage(LogicalMessage):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AreaOff(_AreaFadeMessage):
-    """Fade every channel in an area to off (opcode 0x04)."""
+    """Fade every channel in an area to off (opcode 0x04).
+
+    The official DyNet network monitor calls it "Recall Off Preset". It is
+    not preset 5: on hardware it took the area's channels to 0 % while the
+    area kept reporting its previous preset.
+    """
 
     opcode: ClassVar[int] = Opcode.AREA_OFF
     opcodes: ClassVar[tuple[int, ...]] = (Opcode.AREA_OFF,)

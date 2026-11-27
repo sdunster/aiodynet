@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-11-27)
+
+Types the device-level traffic decoded with System Builder at one site:
+device status and identity, physical channel levels, sensor readings,
+memory, DALI tunnelling, colour temperature, and more area commands.
 
 - **Breaking:** `ResetPreset` is renamed `RecallPreviousPreset`, and
   `Opcode.RESET_PRESET` is `Opcode.RECALL_PREVIOUS_PRESET`, after System

@@ -56,6 +56,9 @@
   logical channel. The report carries current and target levels (0-0xFE,
   not inverted) and current and target colour temperatures in kelvin, from
   tunable-white DALI fittings.
+- `Dynet2FadeLevelTemperature` (0x10) types DyNet 2's "Fade to level and
+  Temperature": fade a logical channel to a level and a colour temperature
+  in kelvin, as System Builder does for tunable-white fittings.
 - `PhysicalStateReport` types physical 0xB8 "Reply Present Physical State",
   a sensor reading; `lux` gives the light level (type 0x01).
 

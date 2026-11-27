@@ -68,6 +68,7 @@ __all__ = [
     "Dynet2ChannelLevelReport",
     "Dynet2Command",
     "Dynet2DeviceRequest",
+    "Dynet2FadeLevelTemperature",
     "Dynet2MemoryData",
     "Dynet2Message",
     "Dynet2PcbVersionReply",
@@ -1933,6 +1934,10 @@ _CHANNEL_LEVEL_REQUEST_LENGTH = 16
 _CHANNEL_LEVEL_REPORT_LENGTH = 32
 _CHANNEL_LEVEL_KIND = 0x03
 _CHANNEL_LEVEL_EXTRA_LENGTH = 10
+_FADE_LEVEL_TEMPERATURE = 0x10
+_FADE_LEVEL_TEMPERATURE_LENGTH = 24
+_FADE_LEVEL_TEMPERATURE_KIND = 0x06
+_DYNET2_FADE_UNIT = 0.01
 _TUNNEL_HEADER_LENGTH = 12
 _DALI_TUNNEL_OPCODE = 0x10
 _DALI_HEADER_LENGTH = 5
@@ -3040,10 +3045,10 @@ class Dynet2RequestChannelLevel(Dynet2Message):
     System Builder shows ``22 da 00 01 | 00 08 | ff | 03 | 00 01 | 00 00`` as
     "Request Channel Level and Temperature" to "Area Rumpus [8] (8), Channel
     Downlights (1), Join 0xFF", "Value: 0". It has no target device: the
-    channel's owner answers with a `Dynet2ChannelLevelReport`. The channel is
-    the number System Builder shows, as sent; the matching DyNet 1 request
-    it sent alongside carried channel byte 0x01 too, which aiodynet's DyNet 1
-    messages number as channel 2. Byte 8 (``03``) is kept raw.
+    channel's owner answers with a `Dynet2ChannelLevelReport`.
+
+    DyNet 2 sends the channel number as is (``00 01`` is channel 1), unlike
+    DyNet 1, which sends channel - 1. Byte 8 (``03``) is kept raw.
     """
 
     source_device_code: int
@@ -3113,9 +3118,10 @@ class Dynet2ChannelLevelReport(Dynet2Message):
     "Reply Channel Level and Temperature (Current Level 50%, Target Level
     50%, Current Temperature 3205 Kelvin, Target Temperature 3200 Kelvin)",
     for a tunable-white channel. Levels use the same scale as
-    `SetPhysicalChannelLevel`: 0 is off and 0xFE 100 %, not inverted. Both
-    levels were equal in the one reply seen, so their order is assumed to
-    match the temperatures'.
+    `SetPhysicalChannelLevel`: 0 is off and 0xFE 100 %, not inverted. After
+    System Builder set 5990 K, a reply read ``17 88 17 66``: current 6024 K,
+    target 5990 K, which confirms the temperatures' order. Both levels were
+    equal in every reply seen, so their order is assumed to match.
     """
 
     device_code: int
@@ -3196,6 +3202,107 @@ class Dynet2ChannelLevelReport(Dynet2Message):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class Dynet2FadeLevelTemperature(Dynet2Message):
+    """Fade a logical channel to a level and colour temperature (type 0x10).
+
+    Layout::
+
+        ac 05 | 10 | source: dev box box | area (2) | join | 06 | channel (2)
+              | level | ff | 00 | fade (2) | kelvin (2) | 00 00 00 | C2 C1
+
+    System Builder shows ``... 00 08 | ff | 06 | 00 01 | 7f | ff | 00 | 00 c8 |
+    0d a2`` as "Fade to level and Temperature" to "Area Rumpus [8] (8),
+    Channel Downlights (1), Join 0xFF": "Level 50%, Temperature 3490 Kelvin,
+    Fade 2s (time), Fade all channels". The DALI controller faded its
+    tunable-white fittings and later reported the new temperature (a
+    `Dynet2ChannelLevelReport`).
+
+    The level is on the `SetPhysicalChannelLevel` scale (0xFE = 100 %). Only
+    fades of 2 s (0x00C8) were seen, so `fade` assumes 10 ms steps. Byte 8
+    (``06``), byte 12 (``ff``, perhaps "Fade all channels") and byte 13
+    (``00``, perhaps the fade unit "(time)") are kept raw.
+    """
+
+    source_device_code: int
+    """Who is sending it."""
+    source_box: int
+    area: int
+    """The area, 0-65535."""
+    channel: int
+    """The channel, 0-65535, sent as is (unlike DyNet 1)."""
+    level: int
+    """0 (off) to 0xFE (100 %)."""
+    kelvin: int
+    """The colour temperature to fade to, in kelvin."""
+    fade_raw: int = 0
+    """Bytes 14-15; see `fade`."""
+    join: int = JOIN_ALL
+    reserved_raw: int = _FADE_LEVEL_TEMPERATURE_KIND
+    """Byte 8."""
+    flags_raw: bytes = b"\xff\x00"
+    """Bytes 12-13."""
+
+    def __post_init__(self) -> None:
+        """Check every field fits its byte(s)."""
+        _check_addresses(self, "source_")
+        for name in ("area", "channel", "kelvin", "fade_raw"):
+            _check_int(name, getattr(self, name), 0, 0xFFFF)
+        for name in ("join", "reserved_raw", "level"):
+            _check_int(name, getattr(self, name), 0, 0xFF)
+        _check_raw("flags_raw", self.flags_raw, 2)
+
+    @property
+    def fade(self) -> float:
+        """The fade in seconds, assuming 10 ms steps."""
+        return round(self.fade_raw * _DYNET2_FADE_UNIT, 2)
+
+    @property
+    def percent(self) -> float:
+        """The level as a percentage, assuming a linear scale."""
+        return self.level * 100 / PHYSICAL_LEVEL_FULL
+
+    @classmethod
+    def from_frame(cls, frame: Dynet2Frame) -> Self:
+        """Read a fade to level and temperature. Raises `ValueError` otherwise."""
+        body = frame.body
+        if not (
+            len(frame) == _FADE_LEVEL_TEMPERATURE_LENGTH
+            and body[0] == _FADE_LEVEL_TEMPERATURE
+            and body[17:] == bytes(3)
+        ):
+            msg = f"Not a DyNet 2 fade to level and temperature: {frame.hex()}"
+            raise ValueError(msg)
+        return cls(
+            source_device_code=body[1],
+            source_box=int.from_bytes(body[2:4]),
+            area=int.from_bytes(body[4:6]),
+            join=body[6],
+            reserved_raw=body[7],
+            channel=int.from_bytes(body[8:10]),
+            level=body[10],
+            flags_raw=body[11:13],
+            fade_raw=int.from_bytes(body[13:15]),
+            kelvin=int.from_bytes(body[15:17]),
+        )
+
+    @override
+    def to_frame(self) -> Dynet2Frame:
+        return Dynet2Frame.build(
+            _pad(
+                bytes((_FADE_LEVEL_TEMPERATURE,))
+                + _address(self.source_device_code, self.source_box)
+                + self.area.to_bytes(2)
+                + bytes((self.join, self.reserved_raw))
+                + self.channel.to_bytes(2)
+                + bytes((self.level,))
+                + self.flags_raw
+                + self.fade_raw.to_bytes(2)
+                + self.kelvin.to_bytes(2)
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownDynet2Message(Dynet2Message):
     """A DyNet 2 frame aiodynet has no typed message for, passed on unchanged.
 
@@ -3270,6 +3377,7 @@ type AnyDynet2Message = (
     | Dynet2TunnelData
     | Dynet2RequestChannelLevel
     | Dynet2ChannelLevelReport
+    | Dynet2FadeLevelTemperature
     | UnknownDynet2Message
 )
 """Every message `decode` can return for a `Dynet2Frame`."""
@@ -3342,6 +3450,7 @@ _DYNET2_TYPES: tuple[_Dynet2Decoder, ...] = (
     Dynet2TunnelData.from_frame,
     Dynet2RequestChannelLevel.from_frame,
     Dynet2ChannelLevelReport.from_frame,
+    Dynet2FadeLevelTemperature.from_frame,
 )
 
 _Decoder = Callable[[Packet], "AnyDynet1Message"]

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `RequestUserPreference` keeps bytes 4 and 5 (`data2_raw`, `data3_raw`,
+  default 0), so a decoded request encodes back to the same bytes. System
+  Builder sends 0x7F and 0xFF in byte 4. Requests built without them send
+  the same bytes as before.
+- Tests: a fixture of real captured packets, up to three of each of 47
+  message types, must decode to the expected type and encode back
+  unchanged.
+
 ## 0.6.0 (2026-11-28)
 
 Memory writes can be confirmed: `query` waits for a write's acknowledgement.

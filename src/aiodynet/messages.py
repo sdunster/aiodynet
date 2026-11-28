@@ -1128,21 +1128,39 @@ class RequestUserPreference(LogicalMessage):
 
     preference: int
     """Which preference, 0-255."""
+    data2_raw: int = 0
+    """Byte 4, undecoded. 0 in Home Assistant's temperature polls; System
+    Builder sent 0x7F and 0xFF when reading preferences 6 and 7."""
+    data3_raw: int = 0
+    """Byte 5, undecoded; 0 in every request seen."""
 
     @override
     def __post_init__(self) -> None:
         LogicalMessage.__post_init__(self)
         _check_int("preference", self.preference, 0, 0xFF)
+        _check_int("data2_raw", self.data2_raw, 0, 0xFF)
+        _check_int("data3_raw", self.data3_raw, 0, 0xFF)
 
     @override
     def to_packet(self) -> Packet:
-        return self._packet(self.preference, Opcode.REQUEST_USER_PREFERENCE, 0, 0)
+        return self._packet(
+            self.preference,
+            Opcode.REQUEST_USER_PREFERENCE,
+            self.data2_raw,
+            self.data3_raw,
+        )
 
     @override
     @classmethod
     def from_packet(cls, packet: Packet) -> Self:
-        _, area, preference, _, _, _, join = packet.data
-        return cls(area=area, preference=preference, join=join)
+        _, area, preference, _, data2, data3, join = packet.data
+        return cls(
+            area=area,
+            preference=preference,
+            data2_raw=data2,
+            data3_raw=data3,
+            join=join,
+        )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

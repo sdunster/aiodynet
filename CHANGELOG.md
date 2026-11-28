@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Documentation: evidence from System Builder's task compiler at one site
+  for the preset and channel-level encodings, 0x72 (fade channel to level
+  in seconds), and the area commands by their task command names; hints
+  for `RestoreSavedPreset`'s fade unit and `SetPresetBank`'s bit 7. No
+  change to bytes or API.
+
 ## 0.5.0 (2026-11-28)
 
 Fixes packets lost when a client closes, types the memory read error, and

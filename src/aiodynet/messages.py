@@ -933,7 +933,9 @@ class FadeChannelToLevel(LogicalMessage):
     """Fade a channel, or every channel, to a level (opcodes 0x71-0x73).
 
     These are the "newer" channel-level opcodes. `SetChannelLevel` (0x80-0x83)
-    is what existing integrations send.
+    is what existing integrations send. System Builder's task compiler uses
+    0x72 for a fade too long for 0x80-0x83: ``ChannelLevel(C=3, L=25, F=10)``
+    became ``1c 13 02 72 c0 0a ff`` (channel 3, 25 %, 10 s).
     """
 
     opcodes: ClassVar[tuple[int, ...]] = tuple(FadeScale)
@@ -985,7 +987,10 @@ class FadeChannelToLevel(LogicalMessage):
 class RestoreSavedPreset(LogicalMessage):
     """Go back to the preset remembered by ``SAVE_CURRENT_PRESET`` (opcode 0x67).
 
-    The fade byte's unit isn't documented, so it is kept raw.
+    The fade byte's unit isn't documented, so it is kept raw. A hint: System
+    Builder's task compiler put 0x02 here for its default fade of 0.2 s,
+    which would make the unit 100 ms (the other area commands encoded the
+    same default as 0x0A in 20 ms steps). One sample, so unconfirmed.
     """
 
     opcodes: ClassVar[tuple[int, ...]] = (Opcode.RESTORE_SAVED_PRESET,)
@@ -1314,7 +1319,9 @@ class LightControlAllPresets(_ResumeAllPresets):
 
     The opcode list calls it "Light Level Compensation Enable / Disable All
     Presets". System Builder shows ``1c 08 ff 11 00 01`` as "Resume Light
-    Control for all Presets" and byte 5 = 0x00 as "Suspend".
+    Control for all Presets" and byte 5 = 0x00 as "Suspend". Its task
+    language calls these ``PEResume()`` and ``PESuspend()`` (PE: the
+    photo-electric light sensor).
     """
 
     opcode: ClassVar[int] = Opcode.LIGHT_CONTROL_ALL_PRESETS
@@ -1353,7 +1360,10 @@ class SetPresetBank(_AreaByteMessage):
     """Set an area's preset bank (opcode 0x64, "Preset Offset / Set Bank").
 
     System Builder shows ``1c 08 00 64 00 00`` as "Set Bank to 0". Banks
-    group presets in eights, as in `PresetSelect`'s bank byte.
+    group presets in eights, as in `PresetSelect`'s bank byte. Its task
+    command ``PresetOffset(O=2)`` compiled to ``1c 13 82 64 00 00 ff``: the
+    byte was 0x82, not 2, so bit 7 may select "offset" rather than "bank"
+    (one sample; `bank` keeps the byte as sent).
     """
 
     opcode: ClassVar[int] = Opcode.SET_PRESET_BANK

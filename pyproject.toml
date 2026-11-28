@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aiodynet"
-version = "0.6.0"
+version = "0.6.1"
 description = "Asyncio client for the Signify Dynalite DyNet lighting control bus"
 readme = "README.md"
 license = "MIT"

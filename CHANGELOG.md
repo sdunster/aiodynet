@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 (2026-11-28)
 
 - `RequestUserPreference` keeps bytes 4 and 5 (`data2_raw`, `data3_raw`,
   default 0), so a decoded request encodes back to the same bytes. System

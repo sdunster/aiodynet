@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-11-28)
+
+Memory writes can be confirmed: `query` waits for a write's acknowledgement.
 
 - `query` waits for a `Dynet2WriteMemory`'s `Dynet2WriteMemoryAck` from the
   device written, at the same address and memory. An acknowledgement with a

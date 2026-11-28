@@ -1,0 +1,131 @@
+# Packets and DyNet 2 frames captured at one site (November 2026), up to
+# three distinct examples of each message type, as "hex  ExpectedType".
+# Left out: serial-number replies, memory data and memory writes (device
+# contents), and sign-ons longer than 20 bytes (they can carry an IP address).
+# Each must decode to its type and encode back to the same bytes.
+1c 0f ff 2f 00 00 ff a8  AreaCascadingSync
+1c 14 ff 2f 00 00 ff a3  AreaCascadingSync
+1c 18 ff 2f 00 00 ff 9f  AreaCascadingSync
+1c 08 ff 16 00 00 ff c8  AreaCommand
+1c 08 ff 15 00 00 ff c9  AreaCommand
+1c 05 ff 15 00 00 ff cc  AreaCommand
+1c 08 00 22 00 00 ff bb  AreaLinksReport
+1c 05 00 22 00 00 ff be  AreaLinksReport
+1c 05 01 22 00 00 ff bd  AreaLinksReport
+1c 08 ff 79 64 00 ff 01  AreaToLevel
+1c 06 00 60 ff ff ff 81  ChannelLevelReport
+1c 06 01 60 d9 fb ff aa  ChannelLevelReport
+1c 06 01 60 d9 d9 ff cc  ChannelLevelReport
+1c 08 ff 21 ff ff ff bf  ClearAreaLinks
+1c 05 01 21 00 00 ff be  ClearAreaLinks
+5c aa 55 53 21 d1 26 3a  ClockDate
+5c aa 55 53 22 11 26 f9  ClockDate
+5c aa 55 53 23 31 26 d8  ClockDate
+5c aa 55 50 07 09 11 34  ClockTime
+5c aa 55 50 07 19 12 23  ClockTime
+5c aa 55 50 07 29 13 12  ClockTime
+5c b3 2a 00 02 11 00 b4  DeviceIdentify
+5c fd 21 00 03 23 00 60  DeviceIdentify
+5c fd 03 00 03 23 00 7e  DeviceIdentify
+5c b3 1d 41 55 ff 16 29  DeviceStatusReport
+5c fd 33 41 55 ff 16 c9  DeviceStatusReport
+ac 03 81 b3 00 1d da 00 01 06 06 00 00 01 5e e8  Dynet2BuildNumberReply
+ac 03 81 b3 00 1d da 00 01 07 06 01 00 01 66 ea  Dynet2BuildNumberReply
+ac 03 81 fd 00 33 da 00 01 06 06 00 00 01 52 48  Dynet2BuildNumberReply
+ac 07 23 64 00 2a 00 08 ff 03 00 01 00 00 7f 7f 0c 85 0c 80 00 00 00 00 00 00 00 00 00 00 3b 8a  Dynet2ChannelLevelReport
+ac 07 23 64 00 2a 00 08 ff 03 00 01 00 00 fe fe 17 88 17 66 00 00 00 00 00 00 00 00 00 00 c3 87  Dynet2ChannelLevelReport
+ac 07 23 64 00 2a 00 08 ff 03 00 01 00 00 00 00 17 88 17 66 00 00 00 00 00 00 00 00 00 00 01 8b  Dynet2ChannelLevelReport
+ac 02 80 da 00 01 b3 00 2a 08 ed ee  Dynet2DeviceRequest
+ac 02 80 da 00 01 b3 00 2a 00 e5 e6  Dynet2DeviceRequest
+ac 02 80 da 00 01 b3 00 36 08 05 fa  Dynet2DeviceRequest
+ac 05 10 da 00 01 00 08 ff 06 00 01 7f ff 00 00 c8 0d a2 00 00 00 d9 9f  Dynet2FadeLevelTemperature
+ac 05 10 da 00 01 00 08 ff 06 00 01 7f ff 00 00 c8 11 8b 00 00 00 91 8c  Dynet2FadeLevelTemperature
+ac 05 10 da 00 01 00 08 ff 06 00 01 7f ff 00 00 c8 17 66 00 00 00 1b 6d  Dynet2FadeLevelTemperature
+ac 04 9b b3 00 5d da 00 01 10 00 80 00 00 01 13 00 00 d1 da  Dynet2MemoryErrorReply
+ac 04 9b b3 00 5d da 00 01 10 00 80 10 00 01 13 00 00 31 ea  Dynet2MemoryErrorReply
+ac 04 9b b3 00 5d da 00 01 10 00 ff 90 00 01 13 00 00 aa e9  Dynet2MemoryErrorReply
+ac 03 81 b3 00 1d da 00 01 0f 0f 00 01 02 b2 fc  Dynet2PcbVersionReply
+ac 03 81 fd 00 33 da 00 01 0f 0f 00 02 03 a9 5e  Dynet2PcbVersionReply
+ac 04 9a da 00 01 b3 00 2a 00 00 00 1a 00 05 00 00 00 87 21  Dynet2ReadMemory
+ac 04 9a da 00 01 b3 00 36 00 00 00 1a 00 05 00 00 00 ff 2d  Dynet2ReadMemory
+ac 04 9a da 00 01 fd 00 03 00 00 00 1a 00 05 00 00 00 79 44  Dynet2ReadMemory
+ac 03 22 da 00 01 00 08 ff 03 00 01 00 00 d2 b7  Dynet2RequestChannelLevel
+ac 02 80 da 00 01 b3 00 2a 0a ef f0  Dynet2RequestSerialNumber
+ac 02 80 da 00 01 fd 00 03 0a c9 13  Dynet2RequestSerialNumber
+ac 02 80 da 00 01 b3 00 0b 0a b1 d1  Dynet2RequestSerialNumber
+ac 04 81 b3 00 1d aa 55 55 01 00 00 02 11 1f 1f 00 00 96 a7  Dynet2SignonReply
+ac 04 81 b3 00 1d aa 55 55 02 00 00 75 05 1f 1f 00 00 15 0f  Dynet2SignonReply
+ac 04 81 fd 00 03 aa 55 55 01 00 00 03 23 1f 1f 00 00 fa ea  Dynet2SignonReply
+ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8  Dynet2StatusRequest
+ac 04 82 da 00 01 b3 00 2a 04 03 00 01 00 01 00 00 00 9d f3  Dynet2StatusRequest
+ac 04 82 da 00 01 b3 00 2a 05 01 00 01 00 01 00 00 00 96 f2  Dynet2StatusRequest
+ac 09 a3 b3 00 36 aa 55 55 07 00 18 00 00 01 01 01 b3 00 36 01 00 00 00 03 00 13 02 01 08 00 3c 05 00 00 00 00 04 48 07  Dynet2TunnelData
+ac 09 a3 b3 00 36 aa 55 55 07 00 18 00 00 01 01 01 b3 00 36 01 00 00 00 03 00 13 02 01 08 00 3c 05 00 00 00 00 00 44 03  Dynet2TunnelData
+ac 09 a3 b3 00 36 aa 55 55 07 00 18 00 00 01 01 01 b3 00 36 01 00 00 00 03 00 13 02 01 08 00 3c 05 00 00 00 00 01 45 04  Dynet2TunnelData
+ac 04 9d b3 00 2a da 00 01 00 00 00 1a 00 00 00 00 00 a9 1f  Dynet2WriteMemoryAck
+ac 04 9d b3 00 2a da 00 01 00 00 06 03 00 00 00 00 00 49 0e  Dynet2WriteMemoryAck
+ac 04 9d b3 00 36 da 00 01 00 00 00 1a 00 00 00 00 00 45 2b  Dynet2WriteMemoryAck
+1c 08 ff 11 00 01 ff cc  LightControlAllPresets
+1c 08 ff 11 00 00 ff cd  LightControlAllPresets
+1c 05 ff 11 00 00 ff d0  LightControlAllPresets
+1c 1c ff 2e 00 16 ff 86  MotionActivitySync
+1c 1c ff 2e 00 11 ff 8b  MotionActivitySync
+1c 1c ff 2e 00 1e ff 7e  MotionActivitySync
+1c 1a ff 31 00 01 ff 9a  OccupancyDetectionAllPresets
+1c 1a ff 31 00 00 ff 9b  OccupancyDetectionAllPresets
+1c 08 ff 31 00 01 ff ac  OccupancyDetectionAllPresets
+1c 08 00 17 00 00 ff c6  Panic
+1c 05 00 17 00 00 ff c9  Panic
+5c b3 2a b8 01 0d 20 e1  PhysicalStateReport
+5c b3 2a b8 01 0d 1e e3  PhysicalStateReport
+5c b3 2a b8 01 0d 1b e6  PhysicalStateReport
+1c 6f 03 62 00 00 ff 11  PresetReport
+1c 70 03 62 00 00 ff 10  PresetReport
+1c 71 03 62 00 00 ff 0f  PresetReport
+1c 06 64 02 00 00 ff 79  PresetSelect
+1c 72 00 00 00 00 ff 73  PresetSelect
+1c 72 00 03 00 00 ff 70  PresetSelect
+1c 08 ff 5f 00 00 ff 7f  RampToLevelExceptOff
+5c b3 1d 0a 00 00 10 ba  RawLightLevelReport
+5c b3 1d 0a 00 00 01 c9  RawLightLevelReport
+1c 08 00 0f 00 00 ff ce  RecallPreviousPreset
+1c 05 00 0f 00 00 ff d1  RecallPreviousPreset
+1c 08 00 23 00 00 ff ba  RequestAreaLinks
+1c 05 00 23 00 00 ff bd  RequestAreaLinks
+1c 13 00 23 00 00 ff af  RequestAreaLinks
+1c 06 00 61 00 00 ff 7e  RequestChannelLevel
+1c 06 01 61 00 00 ff 7d  RequestChannelLevel
+1c 72 00 61 00 00 ff 12  RequestChannelLevel
+5c b3 1d 40 00 00 16 7e  RequestDeviceStatus
+5c fd 33 40 00 00 16 1e  RequestDeviceStatus
+1c 6f 00 63 00 00 ff 13  RequestPreset
+1c 70 00 63 00 00 ff 12  RequestPreset
+1c 71 00 63 00 00 ff 11  RequestPreset
+1c 0c 0c 49 00 00 ff 84  RequestUserPreference
+1c 08 06 49 7f 00 ff 0f  RequestUserPreference
+1c 08 07 49 ff 00 ff 8e  RequestUserPreference
+1c 08 ff 20 ff ff ff c0  SetAreaLinks
+1c 05 01 20 00 00 ff bf  SetAreaLinks
+1c 08 7b 81 ff 64 ff 7e  SetChannelLevel
+1c 08 65 81 ff 64 ff 94  SetChannelLevel
+1c 08 5a 81 ff 64 ff 9f  SetChannelLevel
+1c 08 00 14 00 00 ff c9  SetJoinLevel
+1c 08 ff 14 00 00 ff ca  SetJoinLevel
+1c 05 00 14 00 00 ff cc  SetJoinLevel
+5c 4c 05 92 03 fe 00 c0  SetPhysicalChannelLevel
+5c 4c 05 92 03 00 00 be  SetPhysicalChannelLevel
+5c 64 2a 92 4b fe 00 3b  SetPhysicalChannelLevel
+1c 08 00 64 00 00 ff 79  SetPresetBank
+1c 05 01 64 00 00 ff 7b  SetPresetBank
+1c 05 00 64 00 00 ff 7c  SetPresetBank
+1c 08 00 40 00 00 ff 9d  SetRMask
+1c 05 ff 40 00 00 ff a1  SetRMask
+1c 05 00 40 00 00 ff a0  SetRMask
+1c 08 02 48 01 00 ff 92  SetUserPreference
+1c 08 02 48 7f 00 ff 14  SetUserPreference
+1c 08 02 48 ff 00 ff 94  SetUserPreference
+1c 08 00 18 00 00 ff c5  Unpanic
+1c 05 00 18 00 00 ff c8  Unpanic
+1c 17 0c 4a 1b 59 ff 04  UserPreferenceReport
+1c 17 0c 4a 1b 3b ff 22  UserPreferenceReport
+1c 17 0c 4a 1b 1c ff 41  UserPreferenceReport

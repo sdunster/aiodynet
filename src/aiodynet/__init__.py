@@ -20,6 +20,7 @@ from .errors import (
     DynetError,
     InvalidPacketError,
     MemoryReadError,
+    MemoryWriteError,
     NotConnectedError,
 )
 from .framing import PacketFramer
@@ -189,6 +190,7 @@ __all__ = [
     "LogicalMessage",
     "MemoryErrorCode",
     "MemoryReadError",
+    "MemoryWriteError",
     "Message",
     "MotionActivitySync",
     "MotionEventCounts",

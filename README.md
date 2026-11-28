@@ -246,6 +246,8 @@ or `async with DynetClient(host, port) as client:`.
   the `Dynet2SerialNumberReply`; a `Dynet2DeviceRequest` the sign-on,
   build-number or PCB reply to its command; a `Dynet2ReadMemory` the
   `Dynet2MemoryData`, or raises `MemoryReadError` if the device refuses it;
+  a `Dynet2WriteMemory` the device's `Dynet2WriteMemoryAck`, or raises
+  `MemoryWriteError` if its result isn't 00 00;
   a light-level `Dynet2StatusRequest` the
   `PhysicalStateReport`; and a `Dynet2RequestChannelLevel` the
   `Dynet2ChannelLevelReport`. Requests that get no reply (silence, reset) raise

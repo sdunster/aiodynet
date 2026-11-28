@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .messages import Dynet2MemoryErrorReply
+    from .messages import Dynet2MemoryErrorReply, Dynet2WriteMemoryAck
 
 
 class DynetError(Exception):
@@ -32,6 +32,24 @@ class MemoryReadError(DynetError):
         super().__init__(
             f"device 0x{reply.device_code:02x} box {reply.box} refused a read at "
             f"0x{reply.address:04x}: error {reply.error_code} ({detail})"
+        )
+        self.reply = reply
+
+
+class MemoryWriteError(DynetError):
+    """A device acknowledged a memory write with a result other than 00 00.
+
+    Raised by `DynetClient.query` for a `Dynet2WriteMemory`. Every write seen
+    so far succeeded and was acknowledged with 00 00, so what other results
+    mean is unknown; treat the write as failed. The acknowledgement is in
+    `reply`.
+    """
+
+    def __init__(self, reply: "Dynet2WriteMemoryAck") -> None:
+        """Keep the device's acknowledgement."""
+        super().__init__(
+            f"device 0x{reply.device_code:02x} box {reply.box} answered a write at "
+            f"0x{reply.address:04x} with result {reply.result_raw.hex(' ')}"
         )
         self.reply = reply
 

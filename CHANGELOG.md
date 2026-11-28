@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `query` waits for a `Dynet2WriteMemory`'s `Dynet2WriteMemoryAck` from the
+  device written, at the same address and memory. An acknowledgement with a
+  result other than 00 00 (the only one seen) raises the new
+  `MemoryWriteError`. Writes to all devices are refused.
+
 - Documentation: evidence from System Builder's task compiler at one site
   for the preset and channel-level encodings, 0x72 (fade channel to level
   in seconds), and the area commands by their task command names; hints

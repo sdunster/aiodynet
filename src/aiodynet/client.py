@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Self, TypeGuard, cast, overload
 
 from .dynet2 import Dynet2Frame
-from .errors import DynetConnectionError, MemoryReadError, NotConnectedError
+from .errors import (
+    DynetConnectionError,
+    MemoryReadError,
+    MemoryWriteError,
+    NotConnectedError,
+)
 from .framing import PacketFramer
 from .messages import (
     DYNET2_ALL_DEVICES,
@@ -31,6 +36,8 @@ from .messages import (
     Dynet2SerialNumberReply,
     Dynet2SignonReply,
     Dynet2StatusRequest,
+    Dynet2WriteMemory,
+    Dynet2WriteMemoryAck,
     Message,
     PhysicalStateReport,
     PhysicalStateType,
@@ -361,6 +368,10 @@ class DynetClient:
     ) -> Dynet2MemoryData: ...
     @overload
     async def query(
+        self, request: Dynet2WriteMemory, *, timeout: float = ...
+    ) -> Dynet2WriteMemoryAck: ...
+    @overload
+    async def query(
         self, request: Dynet2StatusRequest, *, timeout: float = ...
     ) -> PhysicalStateReport: ...
     @overload
@@ -387,6 +398,10 @@ class DynetClient:
           the same address. If the device refuses the read (a
           `Dynet2MemoryErrorReply`, such as for an address past the end of
           its memory), raises `MemoryReadError`.
+        - `Dynet2WriteMemory` waits for the written device's
+          `Dynet2WriteMemoryAck` for the same address. If its result isn't
+          00 00 (the only result seen), raises `MemoryWriteError`. Writing
+          changes the device's configuration: see `Dynet2WriteMemory`.
         - `Dynet2StatusRequest` for `StatusQuery.PE_CELL_LIGHT_LEVEL` waits
           for the device's `PhysicalStateReport` of its light level. The
           device's box must fit one byte, as the reply is a DyNet 1 packet.
@@ -409,6 +424,8 @@ class DynetClient:
                 return
             if _refuses(message, request):
                 result.set_exception(MemoryReadError(message))
+            elif _answers(request, message) and _write_failed(message):
+                result.set_exception(MemoryWriteError(message))
             elif _answers(request, message):
                 # _answers only accepts reply types.
                 result.set_result(cast("Reply", message))
@@ -551,6 +568,7 @@ type Query = (
     | Dynet2RequestSerialNumber
     | Dynet2DeviceRequest
     | Dynet2ReadMemory
+    | Dynet2WriteMemory
     | Dynet2StatusRequest
     | Dynet2RequestChannelLevel
 )
@@ -565,6 +583,7 @@ type Reply = (
     | Dynet2BuildNumberReply
     | Dynet2PcbVersionReply
     | Dynet2MemoryData
+    | Dynet2WriteMemoryAck
     | PhysicalStateReport
     | Dynet2ChannelLevelReport
 )
@@ -593,6 +612,17 @@ def _refuses(message: AnyMessage, request: Query) -> TypeGuard[Dynet2MemoryError
     )
 
 
+_WRITE_SUCCEEDED: Final = b"\x00\x00"
+
+
+def _write_failed(message: AnyMessage) -> TypeGuard[Dynet2WriteMemoryAck]:
+    """Whether `message` acknowledges a write with an unexpected result."""
+    return (
+        isinstance(message, Dynet2WriteMemoryAck)
+        and message.result_raw != _WRITE_SUCCEEDED
+    )
+
+
 def _check_query(request: Query) -> None:
     """Raise `ValueError` for a request `query` can't wait for an answer to."""
     match request:
@@ -609,6 +639,12 @@ def _check_query(request: Query) -> None:
             | Dynet2StatusRequest()
         ) if (request.device_code, request.box) == DYNET2_ALL_DEVICES:
             msg = "query() needs one device; subscribe and send() to ask them all"
+            raise ValueError(msg)
+        case Dynet2WriteMemory() if (
+            request.target_device_code,
+            request.target_box,
+        ) == DYNET2_ALL_DEVICES:
+            msg = "query() needs one device; never write to all devices at once"
             raise ValueError(msg)
         case Dynet2DeviceRequest() if request.command not in _ANSWERED_COMMANDS:
             msg = f"Command 0x{request.command:02x} has no reply; use send()"
@@ -630,8 +666,35 @@ def _same_device(request: Query, message: AnyMessage) -> bool:
     )
 
 
-def _answers(request: Query, message: AnyMessage) -> bool:  # noqa: PLR0911
+def _acknowledges(request: Dynet2WriteMemory, message: Dynet2WriteMemoryAck) -> bool:
+    """Whether `message` acknowledges `request`.
+
+    A write's own address is its sender; the target is the device written.
+    """
+    return (
+        message.device_code,
+        message.box,
+        message.address,
+        message.selector_raw,
+    ) == (
+        request.target_device_code,
+        request.target_box,
+        request.address,
+        request.selector_raw,
+    )
+
+
+def _answers(request: Query, message: AnyMessage) -> bool:
     """Whether `message` is the reply `query` waits for after `request`."""
+    if isinstance(request, Dynet2WriteMemory):
+        return isinstance(message, Dynet2WriteMemoryAck) and _acknowledges(
+            request, message
+        )
+    return _answers_request(request, message)
+
+
+def _answers_request(request: Query, message: AnyMessage) -> bool:  # noqa: PLR0911
+    """`_answers` for every request but a memory write."""
     match request, message:
         case RequestPreset(), PresetReport():
             return message.area == request.area
